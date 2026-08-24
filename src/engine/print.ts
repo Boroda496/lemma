@@ -92,8 +92,8 @@ function renderRaw(e: Expr, o: Opts): string {
     case 'rel': return renderRel(e.op, e.args, o);
     case 'and': return e.args.map((a) => render(a, P.Rel, o)).join(' \\quad\\text{and}\\quad ');
     case 'or': return e.args.map((a) => render(a, P.Rel, o)).join(' \\quad\\text{or}\\quad ');
-    case 'tuple': return e.args.map((a) => render(a, P.Rel, o)).join(',\; ');
-    case 'set': return `\\left\\{${e.args.map((a) => render(a, P.Rel, o)).join(',\; ')}\\right\\}`;
+    case 'tuple': return e.args.map((a) => render(a, P.Rel, o)).join(',\\; ');
+    case 'set': return `\\left\\{${e.args.map((a) => render(a, P.Rel, o)).join(',\\; ')}\\right\\}`;
     case 'interval':
       return `${e.loOpen ? '\\left(' : '\\left['}${render(e.lo, P.Rel, o)}, ${render(e.hi, P.Rel, o)}${e.hiOpen ? '\\right)' : '\\right]'}`;
   }
@@ -279,9 +279,13 @@ function renderProduct(input: readonly Expr[], o: Opts): string {
     // A negative number after the first factor gets brackets, so that
     // 4 * (-5) does not print as "4-5", which reads as a subtraction.
     let piece = pieces[i]!;
-    if (cur.k === 'num' && R.isNeg(cur.v)) piece = `\\left(${piece}\\right)`;
+    // A bracketed negative number needs both the brackets and a dot, or
+    // "4(-5)" reads as a function call. Brackets that were already there --
+    // (x-2)(x-3) -- need neither.
+    const bracketedNegative = cur.k === 'num' && R.isNeg(cur.v);
+    if (bracketedNegative) piece = `\\left(${piece}\\right)`;
     const needsDot = o.explicitTimes
-      && (repeated || piece.startsWith('\\left(') || (startsWithDigit(piece) && endsWithDigit(out)));
+      && (repeated || bracketedNegative || (startsWithDigit(piece) && endsWithDigit(out)));
     out = needsDot ? `${out} \\cdot ${piece}` : joinTex(out, piece);
   }
   return prefix + out;

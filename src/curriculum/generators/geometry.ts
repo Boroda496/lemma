@@ -23,7 +23,9 @@ import {
 import * as R from './../../engine/rational.ts';
 import { simplify, simplifyBest } from './../../engine/canon.ts';
 import { toLatex } from './../../engine/print.ts';
-import { DerivationBuilder, R_FORMULA, R_PYTHAGORAS, R_SIMPLIFY, R_ARITHMETIC, R_SUBSTITUTE } from './../../engine/derive.ts';
+import {
+  DerivationBuilder, R_FORMULA, R_PYTHAGORAS, R_SIMPLIFY, R_ARITHMETIC, R_SUBSTITUTE, R_SUB_BOTH,
+} from './../../engine/derive.ts';
 import type { Generator, Figure, Distractor } from './../types.ts';
 
 const scale = (d: number, lo: number, hi: number): number => Math.round(lo + (hi - lo) * d);
@@ -105,11 +107,13 @@ export const genAngles: Generator = ({ difficulty: d, seed }) => {
   const statement = equation(add(...knowns.map((k) => int(k)), X), int(total));
 
   const b = new DerivationBuilder('Find x', statement);
-  b.apply(R_SIMPLIFY, equation(add(int(known), X), int(total)),
-    knowns.length > 1 ? `The known angles total ${known}°.` : `There is one known angle, ${known}°.`,
-    'Add up what you already know.');
-  b.apply(R_SIMPLIFY, equation(X, int(answer)),
-    `Subtract ${known} from ${total}.`, 'Subtract to find what is left.');
+  if (knowns.length > 1) {
+    b.apply(R_ARITHMETIC, equation(add(int(known), X), int(total)),
+      `The known angles total ${known}°.`, 'Add up the angles you already know.');
+  }
+  b.apply(R_SUB_BOTH, equation(X, int(answer)),
+    `Subtract ${known} from both sides: ${total} − ${known} = ${answer}.`,
+    `The known angle and x together make ${total}°.`);
 
   const name = kind === 'complementary' ? 'complementary (they add to 90°)'
     : kind === 'supplementary' ? 'supplementary (they add to 180°)'
@@ -148,10 +152,11 @@ export const genTriangleAngles: Generator = ({ difficulty: d, seed }) => {
 
   const statement = equation(add(int(a), int(b2), X), int(180));
   const bb = new DerivationBuilder('Find x', statement);
-  bb.apply(R_SIMPLIFY, equation(add(int(a + b2), X), int(180)),
-    `The two known angles total ${a + b2}°.`, 'Add the angles you know.');
-  bb.apply(R_SIMPLIFY, equation(X, int(c)),
-    `180 − ${a + b2} = ${c}.`, 'The three angles of a triangle add to 180°.');
+  bb.apply(R_ARITHMETIC, equation(add(int(a + b2), X), int(180)),
+    `The two known angles total ${a + b2}°.`, 'Add the two angles you know.');
+  bb.apply(R_SUB_BOTH, equation(X, int(c)),
+    `Subtract ${a + b2} from both sides: 180 − ${a + b2} = ${c}.`,
+    'The three angles of a triangle add to 180°.');
 
   // Place the triangle so the drawing genuinely has these angles.
   const A: [number, number] = [0, 0];

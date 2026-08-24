@@ -9,7 +9,7 @@
 
 import type { Expr } from './../engine/expr.ts';
 import { isRelation, symbols, sub as subExpr, subst as substExpr } from './../engine/expr.ts';
-import { equivalent, equivalentSets } from './../engine/equivalence.ts';
+import { equivalent, equivalentSets, isZeroExpr } from './../engine/equivalence.ts';
 import { validateDerivation } from './../engine/derive.ts';
 import { simplifyBest, isSimplified } from './../engine/canon.ts';
 import { toLatex } from './../engine/print.ts';
@@ -85,7 +85,7 @@ export function checkParsed(problem: Problem, given: readonly Expr[]): Verdict {
         const d = diagnose(problem, student);
         return {
           correct: false,
-          message: d ? d.diagnosis : 'Not equal to the correct answer.',
+          message: d ? d.diagnosis : describeMiss(student, spec.value),
           evidence: result,
           ...(d?.reviewSkill ? { reviewSkill: d.reviewSkill } : {}),
           ...(d ? { diagnosis: d.diagnosis } : {}),
@@ -162,6 +162,31 @@ function matchSpecialWords(s: string): 'no-solution' | 'all-reals' | null {
   }
   return null;
 }
+
+/**
+ * What to say about a wrong answer when no named misconception matches.
+ *
+ * "Not equal to the correct answer" is true and tells the student nothing.
+ * Two near-misses are worth naming because they are overwhelmingly the most
+ * common and because recognising them is the correction: a sign that got
+ * lost, and a fraction that got flipped.
+ */
+function describeMiss(student: Expr, correct: Expr): string {
+  try {
+    if (equivalent(student, negExpr(correct)).equal) {
+      return 'Right size, wrong sign. Check where a negative went missing.';
+    }
+    if (!isZeroExpr(student) && equivalent(student, recipExpr(correct)).equal) {
+      return 'That is the reciprocal of the answer — the fraction is upside down.';
+    }
+  } catch {
+    // A comparison that cannot be made is not worth reporting; fall through.
+  }
+  return 'Not the right value. Check your working, or ask for a hint.';
+}
+
+const negExpr = (e: Expr): Expr => ({ k: 'mul', args: [{ k: 'num', v: { n: -1n, d: 1n } }, e] });
+const recipExpr = (e: Expr): Expr => ({ k: 'pow', base: e, exp: { k: 'num', v: { n: -1n, d: 1n } } });
 
 /** Does the student's answer match a misconception this problem anticipates? */
 function diagnose(problem: Problem, student: Expr): Distractor | null {
