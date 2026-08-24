@@ -274,8 +274,16 @@ export const primitivePart = (p: RatPoly): RatPoly => polyScale(p, R.inv(content
 export interface Factorization {
   /** Overall rational constant pulled out front. */
   readonly constant: Rat;
-  /** Irreducible (over Q) factors with multiplicities, in increasing degree. */
+  /** Factors with multiplicities, in increasing degree. */
   readonly factors: Array<{ poly: RatPoly; multiplicity: number }>;
+  /**
+   * False when the search was cut short by a size limit, so a listed factor of
+   * degree >= 2 might still be reducible. The app never presents an incomplete
+   * factorization as "fully factored" -- claiming irreducibility we did not
+   * establish would be exactly the kind of confident wrongness this engine
+   * exists to avoid.
+   */
+  readonly complete: boolean;
 }
 
 /**
@@ -299,6 +307,7 @@ export function rationalRoots(p: RatPoly): Rat[] {
   const an = core[core.length - 1]!.n < 0n ? -core[core.length - 1]!.n : core[core.length - 1]!.n;
   const ps = divisors(a0);
   const qs = divisors(an);
+  if (ps === null || qs === null) return roots; // too large to search exhaustively
   const seen = new Set<string>();
   for (const pn of ps) {
     for (const qn of qs) {
@@ -314,72 +323,142 @@ export function rationalRoots(p: RatPoly): Rat[] {
   return roots;
 }
 
-function divisors(n: bigint): bigint[] {
+/** Largest value we will trial-divide. Beyond it we report failure, not a guess. */
+const DIVISOR_LIMIT = 10n ** 14n;
+
+/** All positive divisors, or null when the number is too large to enumerate. */
+function divisors(n: bigint): bigint[] | null {
   if (n === 0n) return [1n];
   const a = n < 0n ? -n : n;
+  if (a > DIVISOR_LIMIT) return null;
   const out: bigint[] = [];
   for (let i = 1n; i * i <= a; i++) {
     if (a % i === 0n) {
       out.push(i);
       if (i * i !== a) out.push(a / i);
     }
-    if (i > 1000000n) break;
   }
   return out.sort((x, y) => (x < y ? -1 : x > y ? 1 : 0));
 }
 
 /**
- * Factor over Q. Complete for the degrees this app generates: linear factors
- * come from the rational-root theorem, quadratics from the discriminant, and
- * anything left over is split by Kronecker's method, which is exhaustive (if
- * slow) and therefore never reports an irreducible factor that is not.
+ * Yun's squarefree decomposition: returns [g1, g2, ...] where gi is the
+ * product of the irreducible factors appearing exactly i times, so
+ * p = c * g1 * g2^2 * g3^3 * ...
+ *
+ * Doing this first is what keeps factoring fast. A perfect fourth power like
+ * (2x^2+x+3)^4 collapses here in a few gcds, instead of handing Kronecker's
+ * method a degree-8 polynomial with six-figure coefficients to grind through.
+ */
+export function squarefreeDecompose(p: RatPoly): RatPoly[] {
+  const f = primitivePart(trim(p));
+  if (degree(f) < 1) return [];
+  const fp = polyDeriv(f);
+  if (isZeroPoly(fp)) return [f];
+
+  let g = polyGcd(f, fp);
+  let c = polyDivMod(f, g).q;
+  let d = polySub(polyDivMod(fp, g).q, polyDeriv(c));
+
+  const out: RatPoly[] = [];
+  for (let i = 1; i <= 32; i++) {
+    if (degree(c) < 1) break;
+    const a = polyGcd(c, d);
+    out.push(a);
+    c = polyDivMod(c, a).q;
+    d = polySub(polyDivMod(d, a).q, polyDeriv(c));
+  }
+  return out;
+}
+
+/**
+ * Factor over Q. Linear factors come from the rational-root theorem, and
+ * whatever remains is split by Kronecker's method, which is exhaustive over
+ * the candidate divisors it examines. When a coefficient grows past the
+ * trial-division limit the search stops and `complete` is set false, rather
+ * than reporting an irreducibility that was never checked.
  */
 export function factorRational(p: RatPoly): Factorization {
   const t = trim(p);
-  if (t.length <= 1) return { constant: t[0] ?? R.ZERO, factors: [] };
+  if (t.length <= 1) return { constant: t[0] ?? R.ZERO, factors: [], complete: true };
 
-  const c = content(t);
-  let work = polyScale(t, R.inv(c));
+  let constant = content(t);
   const out: Array<{ poly: RatPoly; multiplicity: number }> = [];
+  let complete = true;
 
-  const addFactor = (f: RatPoly) => {
+  const addFactor = (f: RatPoly, times: number) => {
     const fc = content(f);
     const fp = polyScale(f, R.inv(fc));
+    if (degree(fp) < 1) {
+      constant = R.mul(constant, R.powInt(R.mul(fc, fp[0] ?? R.ONE), times));
+      return;
+    }
+    constant = R.mul(constant, R.powInt(fc, times));
     const existing = out.find((o) => polyKey(o.poly) === polyKey(fp));
-    if (existing) (existing as { multiplicity: number }).multiplicity++;
-    else out.push({ poly: fp, multiplicity: 1 });
-    return fc;
+    if (existing) existing.multiplicity += times;
+    else out.push({ poly: fp, multiplicity: times });
   };
 
-  let constant = c;
+  // Split by multiplicity first, so repeated factors never reach the expensive
+  // search as a single high-degree lump.
+  const squarefree = squarefreeDecompose(t);
 
-  // 1. Peel off rational roots, with multiplicity.
-  for (;;) {
-    if (degree(work) < 1) break;
-    const roots = rationalRoots(work);
-    if (roots.length === 0) break;
-    const r = roots[0]!;
-    // (q·x − p) for r = p/q keeps integer coefficients.
-    const lin: RatPoly = [R.neg(R.rat(r.n)), R.rat(r.d)];
-    const { q, r: rem } = polyDivMod(work, lin);
-    if (!isZeroPoly(rem)) break; // should not happen; bail rather than lie
-    constant = R.mul(constant, addFactor(lin));
-    work = q;
-  }
-
-  // 2. Split whatever is left.
-  const pieces = degree(work) >= 2 ? kroneckerSplit(work) : [work];
-  for (const piece of pieces) {
-    if (degree(piece) < 1) {
-      const v = piece[0] ?? R.ONE;
-      constant = R.mul(constant, v);
-      continue;
+  squarefree.forEach((part, idx) => {
+    const multiplicity = idx + 1;
+    let work = part;
+    if (degree(work) < 1) {
+      constant = R.mul(constant, R.powInt(work[0] ?? R.ONE, multiplicity));
+      return;
     }
-    constant = R.mul(constant, addFactor(piece));
-  }
+
+    // 1. Peel off rational roots. Within a squarefree part each is simple.
+    for (;;) {
+      if (degree(work) < 1) break;
+      const roots = rationalRoots(work);
+      if (roots.length === 0) break;
+      const r = roots[0]!;
+      // (q*x - p) for r = p/q keeps the coefficients integral.
+      const lin: RatPoly = [R.neg(R.rat(r.n)), R.rat(r.d)];
+      const { q, r: rem } = polyDivMod(work, lin);
+      if (!isZeroPoly(rem)) break; // cannot happen; bail rather than lie
+      addFactor(lin, multiplicity);
+      work = q;
+    }
+
+    // 2. Split whatever is left.
+    if (degree(work) >= 2) {
+      const split = kroneckerSplit(work);
+      if (!split.complete) complete = false;
+      for (const piece of split.pieces) addFactor(piece, multiplicity);
+    } else if (degree(work) >= 1) {
+      addFactor(work, multiplicity);
+    } else {
+      constant = R.mul(constant, R.powInt(work[0] ?? R.ONE, multiplicity));
+    }
+  });
 
   out.sort((a, b) => degree(a.poly) - degree(b.poly) || polyKey(a.poly).localeCompare(polyKey(b.poly)));
-  return { constant, factors: out };
+
+  // Recover the constant by division rather than by bookkeeping.
+  //
+  // The factors are primitive by construction and polyGcd returns monic
+  // results, so the scale accumulated along the way is not reliable. Dividing
+  // the original by the product of the factors recovers the true constant and
+  // verifies the whole factorization at once: a non-zero remainder or a
+  // non-constant quotient means the result is wrong, and we say so instead of
+  // returning it.
+  let product: RatPoly = [R.ONE];
+  for (const { poly, multiplicity } of out) product = polyMul(product, polyPow(poly, multiplicity));
+  const { q, r } = polyDivMod(t, product);
+  if (isZeroPoly(r) && degree(q) === 0) {
+    constant = trim(q)[0] ?? R.ONE;
+  } else {
+    // Should be unreachable. Report the input unfactored rather than a product
+    // that does not multiply back to it.
+    return { constant: R.ONE, factors: [{ poly: t, multiplicity: 1 }], complete: false };
+  }
+
+  return { constant, factors: out, complete };
 }
 
 const polyKey = (p: RatPoly): string => trim(p).map(R.toString).join(',');
@@ -390,34 +469,51 @@ const polyKey = (p: RatPoly): string => trim(p).map(R.toString).join(',');
  * every combination of divisors is exhaustive, so a "no split" answer is a
  * genuine irreducibility certificate over Q for these sizes.
  */
-function kroneckerSplit(p: RatPoly): RatPoly[] {
+interface Split {
+  readonly pieces: RatPoly[];
+  /** False when a size limit stopped the search before it was exhaustive. */
+  readonly complete: boolean;
+}
+
+function kroneckerSplit(p: RatPoly): Split {
   const n = degree(p);
-  if (n <= 1) return [p];
-  if (n > 8) return [p]; // beyond curriculum range; refuse rather than guess
+  if (n <= 1) return { pieces: [p], complete: true };
+  if (n === 2) return { pieces: [p], complete: true }; // a quadratic with no rational root is irreducible over Q
+  if (n > 6) return { pieces: [p], complete: false };  // beyond what we will search
 
   const prim = primitivePart(p);
   const half = Math.floor(n / 2);
 
   for (let d = 1; d <= half; d++) {
     const points: Rat[] = [];
-    for (let i = 0; points.length <= d; i++) {
+    for (let i = 0; points.length <= d && i <= 60; i++) {
       const x = R.rat(i % 2 === 0 ? i / 2 : -(i + 1) / 2);
       if (!R.isZero(polyEval(prim, x))) points.push(x);
-      if (i > 60) break;
     }
     if (points.length <= d) continue;
 
-    const divisorSets = points.map((x) => {
-      const val = polyEval(prim, x);
-      const ds = divisors(val.n);
-      return ds.flatMap((q) => [R.rat(q), R.rat(-q)]);
-    });
+    const divisorSets: Rat[][] = [];
+    let searchable = true;
+    for (const x of points) {
+      const ds = divisors(polyEval(prim, x).n);
+      if (ds === null || ds.length > 64) { searchable = false; break; }
+      divisorSets.push(ds.flatMap((q) => [R.rat(q), R.rat(-q)]));
+    }
+    if (!searchable) return { pieces: [p], complete: false };
+
+    // Guard the combinatorial size: the product of the set sizes is the number
+    // of candidate factors we would interpolate.
+    const combos = divisorSets.reduce((acc, s) => acc * s.length, 1);
+    if (combos > 400000) return { pieces: [p], complete: false };
 
     const combo: Rat[] = new Array(d + 1).fill(R.ZERO);
     const found = searchCombos(divisorSets, 0, combo, points, prim, d);
-    if (found) return [found.a, ...kroneckerSplit(found.b)];
+    if (found) {
+      const rest = kroneckerSplit(found.b);
+      return { pieces: [found.a, ...rest.pieces], complete: rest.complete };
+    }
   }
-  return [p];
+  return { pieces: [p], complete: true };
 }
 
 function searchCombos(

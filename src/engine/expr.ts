@@ -25,7 +25,7 @@ export type FnName =
   | 'sin' | 'cos' | 'tan' | 'sec' | 'csc' | 'cot'
   | 'asin' | 'acos' | 'atan' | 'asec' | 'acsc' | 'acot' | 'atan2'
   | 'sinh' | 'cosh' | 'tanh' | 'asinh' | 'acosh' | 'atanh'
-  | 'floor' | 'ceil' | 'sign' | 'factorial' | 'binom'
+  | 'floor' | 'ceil' | 'sign' | 'factorial' | 'binom' | 'pm'
   | 'gcd' | 'lcm' | 'min' | 'max' | 'mod'
   | 'deriv' | 'integral' | 'sum' | 'prod' | 'limit';
 
