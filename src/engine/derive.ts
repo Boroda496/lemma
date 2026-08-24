@@ -335,6 +335,29 @@ export class DerivationBuilder {
     return this;
   }
 
+  /**
+   * Append steps that were already built and verified elsewhere.
+   *
+   * A solver that finishes by delegating -- taking logs and then solving the
+   * linear equation that results -- must carry the inner steps across as they
+   * are. Rebuilding them with `apply` re-asserts them as equivalences, which
+   * throws on any inner step that was a declared narrowing, such as dividing
+   * by a symbolic coefficient.
+   */
+  absorb(steps: readonly Step[]): this {
+    for (const s of steps) {
+      if (key(s.from) !== key(this.current)) {
+        throw new DerivationError(
+          `Absorbed step "${s.title}" does not continue from the current line.`,
+          s.rule, this.current, s.from, s.evidence,
+        );
+      }
+      this.steps.push(s);
+      this.current = s.to;
+    }
+    return this;
+  }
+
   /** A step that narrows the statement rather than preserving it. */
   applyUnverified(rule: Rule, to: Expr, reason: string, detail?: string, nudge?: string): this {
     this.steps.push(step({ rule, from: this.current, to, detail, nudge, unverified: reason }));

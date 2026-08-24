@@ -19,6 +19,7 @@ import { ALL_SKILLS, getSkill } from './skills.ts';
 import * as A from './generators/algebra.ts';
 import * as G from './generators/geometry.ts';
 import * as S from './generators/statistics.ts';
+import * as F from './generators/functions.ts';
 
 /** skill id -> the generators that can produce problems for it. */
 const REGISTRY: Record<string, readonly Generator[]> = {
@@ -71,6 +72,17 @@ const REGISTRY: Record<string, readonly Generator[]> = {
   'right-triangle-trig': [G.genRightTriangleTrig],
   'parallel-lines': [G.genParallelLines],
   'transformations': [G.genTransformations],
+
+  // functions
+  'function-notation': [F.genFunctionNotation],
+  'domain-range': [F.genDomainRange],
+  'graphing-linear': [F.genGraphingLinear],
+  'graphing-quadratics': [F.genGraphingQuadratics],
+  'inverse-functions': [F.genInverseFunctions],
+  'exponential-functions': [F.genExponentialFunctions],
+  'logarithms': [F.genLogarithms],
+  'exponential-equations': [F.genExponentialEquations],
+  'sequences-series': [F.genSequences],
 
   // statistics
   'mean-median-mode': [S.genCentreAndSpread],

@@ -30,6 +30,7 @@ import { tryParse } from './../engine/parse.ts';
 import { MathView } from './MathView.tsx';
 import { MathInput, type KeyboardFlavour } from './MathInput.tsx';
 import { FigureView } from './FigureView.tsx';
+import { RichText } from './RichText.tsx';
 import type { Learner } from './useLearner.ts';
 
 interface Loaded {
@@ -221,7 +222,9 @@ export function Practice({ learner, focusSkill, onClearFocus }: {
 
       <div className="card">
         <div className="problem__prompt">{problem.prompt}</div>
-        {problem.context && <div className="problem__context">{problem.context}</div>}
+        {problem.context && (
+          <div className="problem__context"><RichText text={problem.context} /></div>
+        )}
         {problem.figure && <FigureView figure={problem.figure} />}
         <div className="problem__statement">
           <MathView latex={toLatex(problem.statement)} size="lg" />
