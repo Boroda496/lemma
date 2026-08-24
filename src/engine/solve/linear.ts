@@ -10,12 +10,13 @@
 
 import type { Expr } from './../expr.ts';
 import {
-  add, mul, num, int, sym, sub as subE, div as divE, rel, equation,
-  key, isRelation, symbols, hasSymbol, E0,
+  add, mul, num, int, sym, sub as subE, div, neg, rel, equation,
+  key, isRelation, symbols, isZeroE, isOneE, splitCoeff, hasSymbol, E0,
 } from './../expr.ts';
 import * as R from './../rational.ts';
-import { simplify } from './../canon.ts';
+import { simplify, simplifyBest } from './../canon.ts';
 import { evalExact } from './../evaluate.ts';
+import { isZeroExpr } from './../equivalence.ts';
 import { expand, toRatPoly, toExprPoly, degree } from './../polynomial.ts';
 import { toLatex } from './../print.ts';
 import {
@@ -62,91 +63,174 @@ export function solveLinear(e: Expr, v?: string): SolveResult {
   const b = new DerivationBuilder(goal, e);
   const X = sym(variable);
 
-  // 1. Clear brackets and collect on each side, if there is anything to do.
-  const cleaned = expandBothSides(b, e);
+  // 0. Work on whichever side already holds the unknown.
+  //
+  // Without this, "P = 2l + 2w" solved for l drags the 2l leftward and then
+  // divides by -2, which is correct and is not what anyone writes. Swapping
+  // first keeps the coefficient positive and the working short.
+  const oriented = orientForVariable(b, e, variable);
 
-  // 2. Read off the coefficients of (left − right).
+  // 1. Clear brackets and collect on each side, if there is anything to do.
+  const cleaned = expandBothSides(b, oriented);
+
+  // 2. Read off the coefficients of (left - right).
+  //
+  // Coefficients are expressions, not numbers, because "solve A = lw for w" is
+  // the same problem as "solve 12 = 3w for w" and should take the same path.
+  // The only difference is that the answer contains letters.
   const [lhs, rhs] = (cleaned as Extract<Expr, { k: 'rel' }>).args;
   const diff = simplify(expand(subE(lhs!, rhs!)));
-  const p = toRatPoly(diff, variable);
+  const p = toExprPoly(diff, variable);
 
-  if (p === null || degree(p) > 1) {
+  if (p === null || p.length - 1 > 1) {
     b.stop(`This is not linear in ${variable}.`);
     return { derivation: b.build(), solutions: [] };
   }
 
-  const a = p[1] ?? R.ZERO;   // coefficient of the variable
-  const c = p[0] ?? R.ZERO;   // constant
+  const a = simplify(p[1] ?? E0);   // coefficient of the variable
+  const c = simplify(p[0] ?? E0);   // everything else
 
   // Degenerate cases: the variable cancelled out entirely.
-  if (R.isZero(a)) {
-    if (R.isZero(c)) {
+  if (isZeroE(a)) {
+    if (isZeroExpr(c)) {
       b.apply(R_SIMPLIFY, rel(op, E0, E0),
         `Every term containing ${variable} cancels, leaving a statement that is always true.`,
         `See what happens to the ${variable} terms.`);
       return { derivation: b.build(), solutions: [], special: 'all-reals' };
     }
-    b.apply(R_SIMPLIFY, rel(op, num(c), E0),
-      `Every term containing ${variable} cancels, leaving ${R.toString(c)} ${op} 0, which is false.`,
+    b.apply(R_SIMPLIFY, rel(op, c, E0),
+      `Every term containing ${variable} cancels, leaving ${toLatex(c)} ${op} 0, which cannot hold.`,
       `See what happens to the ${variable} terms.`);
     return { derivation: b.build(), solutions: [], special: 'no-solution' };
   }
 
-  // 3. Gather the variable on the left and the constants on the right.
-  const rhsPoly = toRatPoly(simplify(expand(rhs!)), variable) ?? [R.ZERO];
-  const rhsVarCoeff = rhsPoly[1] ?? R.ZERO;
+  // 3. Gather the variable on the left and everything else on the right.
+  const rhsPoly = toExprPoly(simplify(expand(rhs!)), variable) ?? [E0];
+  const rhsVarCoeff = simplify(rhsPoly[1] ?? E0);
 
   let current = cleaned;
-  if (!R.isZero(rhsVarCoeff)) {
-    const move = mul(num(rhsVarCoeff), X);
+  if (!isZeroE(rhsVarCoeff)) {
+    const move = mul(rhsVarCoeff, X);
     const next = simplify(relMap(current, (side) => simplify(expand(subE(side, move)))));
+    const negated = isNegativeLead(rhsVarCoeff);
     current = b.apply(
-      R.isNeg(rhsVarCoeff) ? R_ADD_BOTH : R_SUB_BOTH,
+      negated ? R_ADD_BOTH : R_SUB_BOTH,
       next,
-      `${R.isNeg(rhsVarCoeff) ? 'Add' : 'Subtract'} ${toLatex(mul(num(R.abs(rhsVarCoeff)), X))} ` +
-      `${R.isNeg(rhsVarCoeff) ? 'to' : 'from'} both sides to bring every ${variable} to the left.`,
-      `The unknown appears on both sides.`,
+      `${negated ? 'Add' : 'Subtract'} ${toLatex(mul(absLead(rhsVarCoeff), X))} ` +
+      `${negated ? 'to' : 'from'} both sides to bring every ${variable} to the left.`,
+      'The unknown appears on both sides.',
     ).expr;
   }
 
-  // Constant on the left moves right.
+  // Anything on the left without the variable moves right.
   const lhsNow = (current as Extract<Expr, { k: 'rel' }>).args[0]!;
-  const lhsPoly = toRatPoly(simplify(expand(lhsNow)), variable) ?? [R.ZERO];
-  const lhsConst = lhsPoly[0] ?? R.ZERO;
-  if (!R.isZero(lhsConst)) {
-    const next = simplify(relMap(current, (side) => simplify(expand(subE(side, num(lhsConst))))));
+  const lhsPoly = toExprPoly(simplify(expand(lhsNow)), variable) ?? [E0];
+  const lhsConst = simplify(lhsPoly[0] ?? E0);
+  if (!isZeroE(lhsConst)) {
+    const next = simplify(relMap(current, (side) => simplify(expand(subE(side, lhsConst)))));
+    const negated = isNegativeLead(lhsConst);
     current = b.apply(
-      R.isNeg(lhsConst) ? R_ADD_BOTH : R_SUB_BOTH,
+      negated ? R_ADD_BOTH : R_SUB_BOTH,
       next,
-      `${R.isNeg(lhsConst) ? 'Add' : 'Subtract'} ${R.toString(R.abs(lhsConst))} ` +
-      `${R.isNeg(lhsConst) ? 'to' : 'from'} both sides so only the ${variable} term is left.`,
-      `There is a number sitting next to the ${variable} term.`,
+      `${negated ? 'Add' : 'Subtract'} ${toLatex(absLead(lhsConst))} ` +
+      `${negated ? 'to' : 'from'} both sides so only the ${variable} term is left.`,
+      `There is something other than ${variable} on that side.`,
     ).expr;
   }
 
   // 4. Divide by the coefficient.
-  const answer = R.neg(R.div(c, a));
-  if (!R.isOne(a)) {
-    const finalOp = (op !== '=' && R.isNeg(a)) ? flipOp(op) : op;
-    const next = rel(finalOp as never, X, num(answer));
-    const flipNote = R.isNeg(a) && op !== '='
+  //
+  // With numeric coefficients the answer is a number and the usual
+  // presentation search applies. With symbolic ones the answer is a fraction,
+  // and that search pulls it apart: (P - 2w)/2 scores as two smaller pieces
+  // and comes back as -w + P/2, which is the same value written worse.
+  const bothNumeric = a.k === 'num' && c.k === 'num';
+  const answer = bothNumeric
+    ? simplifyBest(neg(div(c, a)))
+    : simplify(div(simplify(neg(c)), a));
+  if (!isOneE(a)) {
+    const numericA = a.k === 'num' ? a.v : null;
+    const negativeCoeff = numericA ? R.isNeg(numericA) : isNegativeLead(a);
+    const finalOp = (op !== '=' && negativeCoeff) ? flipOp(op) : op;
+    const next = rel(finalOp as never, X, answer);
+
+    const flipNote = negativeCoeff && op !== '='
       ? ' Multiplying or dividing by a negative reverses the inequality.'
       : '';
     // A coefficient of 1/3 calls for multiplying by 3. "Divide both sides by
     // 1/3" is correct and nobody says it.
-    const unitNumerator = R.abs(a).n === 1n && a.d !== 1n;
+    const unitNumerator = numericA !== null && R.abs(numericA).n === 1n && numericA.d !== 1n;
     const rule = unitNumerator ? R_MUL_BOTH : R_DIV_BOTH;
-    const detail = unitNumerator
-      ? `Multiply both sides by ${R.toString(R.rat(R.isNeg(a) ? -a.d : a.d))}.${flipNote}`
-      : `Divide both sides by ${R.toString(a)}.${flipNote}`;
-    b.apply(rule, next, detail, `The ${variable} still has a coefficient.`);
+    const detail = unitNumerator && numericA
+      ? `Multiply both sides by ${R.toString(R.rat(R.isNeg(numericA) ? -numericA.d : numericA.d))}.${flipNote}`
+      : `Divide both sides by ${toLatex(a)}.${flipNote}` +
+        (numericA === null ? ` This assumes ${toLatex(a)} is not zero.` : '');
+
+    if (numericA === null) {
+      // Dividing by a symbolic coefficient is not an equivalence and the
+      // oracle is right to reject it: A = lw and w = A/l disagree when l is
+      // zero, where the first is satisfied by every w and the second is
+      // undefined. The division is still the correct move, so it is recorded
+      // as a declared narrowing with the assumption stated rather than
+      // asserted as an equivalence that does not hold.
+      b.applyUnverified(rule, next,
+        `Dividing by ${toLatex(a)} assumes it is not zero, which excludes a case the original allowed.`,
+        detail, `The ${variable} still has a coefficient.`);
+    } else {
+      b.apply(rule, next, detail, `The ${variable} still has a coefficient.`);
+    }
   } else {
-    const next = rel(op, X, num(answer));
-    b.apply(R_SIMPLIFY, next, 'Read off the answer.', 'This is nearly solved.');
+    b.apply(R_SIMPLIFY, rel(op, X, answer), 'Read off the answer.', 'This is nearly solved.');
   }
 
-  const solutions = op === '=' ? [num(answer)] : [];
+  const solutions = op === '=' ? [answer] : [];
   return { derivation: b.build(), solutions };
+}
+
+/** True when the two expressions are the same terms in a different order. */
+function onlyReorders(from: Expr, to: Expr): boolean {
+  if (from.k !== 'add' || to.k !== 'add') return false;
+  if (from.args.length !== to.args.length) return false;
+  const a = from.args.map(key).sort().join('|');
+  const b = to.args.map(key).sort().join('|');
+  return a === b;
+}
+
+/**
+ * Put the side that carries the unknown on the left, swapping if the left has
+ * none of it and the right does. Swapping the two sides of an inequality
+ * reverses its direction; for an equation it changes nothing.
+ */
+function orientForVariable(b: DerivationBuilder, e: Expr, variable: string): Expr {
+  if (e.k !== 'rel') return e;
+  const [lhs, rhs] = e.args;
+  if (!lhs || !rhs) return e;
+  const leftHas = hasSymbol(lhs, variable);
+  const rightHas = hasSymbol(rhs, variable);
+  if (leftHas || !rightHas) return e;
+
+  const swappedOp = (({ '<': '>', '>': '<', '<=': '>=', '>=': '<=' } as Record<string, string>)[e.op] ?? e.op);
+  const swapped = rel(swappedOp as never, rhs, lhs);
+  b.apply(R_SIMPLIFY, swapped,
+    `Write the side containing ${variable} on the left. ` +
+    (e.op === '=' ? 'An equation reads the same either way.' : 'Swapping the sides reverses the inequality.'),
+    `Which side is ${variable} on?`);
+  return swapped;
+}
+
+/** Does this expression print with a leading minus? Drives "add" versus "subtract". */
+function isNegativeLead(e: Expr): boolean {
+  if (e.k === 'num') return R.isNeg(e.v);
+  const [coeff] = splitCoeff(e);
+  return R.isNeg(coeff);
+}
+
+/** The same expression with any leading minus removed, for phrasing. */
+function absLead(e: Expr): Expr {
+  if (e.k === 'num') return num(R.abs(e.v));
+  const [coeff, body] = splitCoeff(e);
+  if (!R.isNeg(coeff)) return e;
+  return simplify(mul(num(R.neg(coeff)), body));
 }
 
 /** Apply a function to both sides of a relation. */
@@ -171,6 +255,8 @@ function expandBothSides(b: DerivationBuilder, e: Expr): Expr {
       args[side] = s.to;
       const rebuilt = rel(current.op, ...args) as Extract<Expr, { k: 'rel' }>;
       if (key(rebuilt) === key(current)) continue;
+      // Reordering terms is not a move worth a line of working.
+      if (onlyReorders(s.from, s.to)) { current = rebuilt; continue; }
       b.apply(s.rule === 'distribute' ? R_DISTRIBUTE : R_SIMPLIFY, rebuilt, s.detail, s.nudge);
       current = rebuilt;
     }

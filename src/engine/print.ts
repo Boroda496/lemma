@@ -176,10 +176,57 @@ function stripUnits(e: Expr): Expr[] {
  * otherwise be bracketed as though it were a real product.
  */
 function renderInsideFraction(e: Expr, o: Opts): string {
-  const parts = stripUnits(e);
+  const tidied = distributeNegatedSum(e);
+  if (tidied.k === 'add') return render(tidied, P.Rel, o);
+  const parts = stripUnits(tidied);
   if (parts.length === 0) return '1';
   if (parts.length === 1) return render(parts[0]!, P.Rel, o);
   return renderProduct(parts, o);
+}
+
+/**
+ * Tidy a fraction's numerator for display.
+ *
+ * Two rewrites, both confined to the inside of a fraction bar:
+ *   -(u - v)     becomes  v - u
+ *   -5(-F + 32)  becomes  5F - 160
+ * and a sum opening with a minus is rotated so a positive term leads.
+ *
+ * Only a numeric factor times a single sum is touched. Expanding numerators in
+ * general would rewrite what the author wrote, turning a deliberate
+ * (x+1)(x+2) in a derivation step into x^2+3x+2 and making the step look like
+ * it did something it did not.
+ */
+function distributeNegatedSum(e: Expr): Expr {
+  if (e.k === 'add') return positiveFirst(e);
+  if (e.k !== 'mul') return e;
+  const parts = stripUnits(e);
+  if (parts.length !== 2) return e;
+  const numIdx = parts.findIndex((f) => f.k === 'num' && R.isNeg(f.v));
+  if (numIdx === -1) return e;
+  const factor = parts[numIdx] as Extract<Expr, { k: 'num' }>;
+  const sum = parts[1 - numIdx];
+  if (!sum || sum.k !== 'add') return e;
+  return positiveFirst({ k: 'add', args: sum.args.map((t) => scaleTerm(t, factor.v)) });
+}
+
+/** Multiply a term by a constant, folding it into the term's own coefficient. */
+function scaleTerm(t: Expr, k: Rat): Expr {
+  if (t.k === 'num') return { k: 'num', v: R.mul(t.v, k) };
+  const [coeff, body] = splitCoeff(t);
+  const scaled = R.mul(coeff, k);
+  if (R.isOne(scaled)) return body;
+  return { k: 'mul', args: [{ k: 'num', v: scaled }, body] };
+}
+
+/** Rotate a sum so it does not open with a minus sign, when it can. */
+function positiveFirst(e: Expr): Expr {
+  if (e.k !== 'add' || e.args.length < 2) return e;
+  const leads = (t: Expr): boolean => !R.isNeg(splitCoeff(t)[0]);
+  if (leads(e.args[0]!)) return e;
+  const idx = e.args.findIndex(leads);
+  if (idx <= 0) return e;
+  return { k: 'add', args: [e.args[idx]!, ...e.args.filter((_, i) => i !== idx)] };
 }
 
 /**
@@ -240,7 +287,12 @@ function renderProduct(input: readonly Expr[], o: Opts): string {
   return prefix + out;
 }
 
-const startsWithDigit = (s: string) => /^[0-9\\]/.test(s) && !/^\\left/.test(s);
+/**
+ * Would juxtaposing this fragment after a number read as one longer number?
+ * A digit or a fraction would; a named constant like \\pi would not, and
+ * "2\\pi" is how anyone writes it.
+ */
+const startsWithDigit = (s: string) => /^[0-9]/.test(s) || /^\\[dt]?frac/.test(s);
 const endsWithDigit = (s: string) => /[0-9}]$/.test(s);
 
 /**

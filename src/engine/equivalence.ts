@@ -381,12 +381,21 @@ export function equivalentRelations(a: Expr, b: Expr, opts: { seed?: number } = 
   return { equal: false, method: direct.method, detail: direct.detail };
 }
 
-/** If a = k·b for a nonzero rational constant k, return k; else null. */
+/**
+ * If a = k*b for a nonzero rational constant k, return k; else null.
+ *
+ * Both an exact and a numeric path, because the exact one alone was too weak:
+ * evalExact returns null for anything containing pi, so "C = 2*pi*r" and
+ * "2*pi*r = C" could not be recognised as the same equation and simply
+ * swapping the sides was reported as an error.
+ */
 export function constantRatio(a: Expr, b: Expr, seed?: number): Rat | null {
-  const vars = [...new Set([...symbols(a), ...symbols(b)])];
   const rng = new Rng(seed ?? Rng.hash('ratio:' + key(a) + '|' + key(b)));
+  const vars = [...new Set([...symbols(a), ...symbols(b)])];
+
   let candidate: Rat | null = null;
   let confirmed = 0;
+  let exactUnavailable = false;
 
   for (let attempt = 0; attempt < 60 && confirmed < 6; attempt++) {
     const env: Record<string, Rat> = {};
@@ -396,11 +405,49 @@ export function constantRatio(a: Expr, b: Expr, seed?: number): Rat | null {
       va = evalExact(a, env);
       vb = evalExact(b, env);
     } catch { continue; }
-    if (va === null || vb === null) return null;
+    if (va === null || vb === null) { exactUnavailable = true; break; }
     if (R.isZero(vb)) continue;
     const k = R.div(va, vb);
     if (candidate === null) candidate = k;
     else if (!R.eq(candidate, k)) return null;
+    confirmed++;
+  }
+
+  if (!exactUnavailable) {
+    return confirmed >= 6 && candidate !== null && !R.isZero(candidate) ? candidate : null;
+  }
+  return numericConstantRatio(a, b, vars, rng);
+}
+
+/**
+ * The numeric fallback. A ratio is accepted only when it agrees across six
+ * independent points AND lands on a simple rational that reproduces the
+ * observed value to full working precision, so a ratio that merely looks
+ * rational at low precision is rejected rather than guessed at.
+ */
+function numericConstantRatio(a: Expr, b: Expr, vars: string[], rng: Rng): Rat | null {
+  let candidate: Rat | null = null;
+  let confirmed = 0;
+
+  for (let attempt = 0; attempt < 80 && confirmed < 6; attempt++) {
+    const env: Record<string, C> = {};
+    for (const v of vars) {
+      const re = R.rat(rng.bigint(18) - (1n << 17n) || 1n, rng.bigint(5) * 2n + 1n);
+      env[v] = { re: B.fromRat(re), im: B.BF_ZERO };
+    }
+    let va: C, vb: C;
+    try {
+      va = evalNumeric(a, env);
+      vb = evalNumeric(b, env);
+    } catch { continue; }
+    if (CX.isZero(vb) || !CX.isReal(va) || !CX.isReal(vb)) continue;
+
+    const ratio = B.div(va.re, vb.re);
+    const asRational = R.bestRationalApprox(B.toNumber(ratio), 10000);
+    // Reject unless the rational reproduces the observed ratio exactly enough.
+    if (!B.nearlyEqual(B.fromRat(asRational), ratio, 60)) return null;
+    if (candidate === null) candidate = asRational;
+    else if (!R.eq(candidate, asRational)) return null;
     confirmed++;
   }
   return confirmed >= 6 && candidate !== null && !R.isZero(candidate) ? candidate : null;
