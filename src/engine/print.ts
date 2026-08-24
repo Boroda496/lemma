@@ -125,9 +125,19 @@ function renderAdd(args: readonly Expr[], o: Opts): string {
     const shown = negative
       ? (isOneE(body) ? { k: 'num' as const, v: R.neg(coeff) } : rebuild(R.neg(coeff), body))
       : term;
-    if (idx === 0) out += render(shown, P.Add, o);
-    else out += ` ${negative ? '-' : '+'} ${render(shown, P.Add, o)}`;
-    if (idx === 0 && negative) out = `-${out}`;
+    let piece = render(shown, P.Add, o);
+    let minus = negative;
+
+    // The coefficient is not always the whole story: a term like (-1)*4*(-5)
+    // has a positive coefficient but renders as "-4 * (-5)". Reading the sign
+    // off the rendered text as well avoids emitting "+ -4".
+    if (!minus && piece.startsWith('-')) {
+      minus = true;
+      piece = piece.slice(1);
+    }
+
+    if (idx === 0) out += minus ? `-${piece}` : piece;
+    else out += ` ${minus ? '-' : '+'} ${piece}`;
   });
   return out;
 }
@@ -143,18 +153,59 @@ function renderMul(e: Expr, o: Opts): string {
   if (!isOneE(d) && o.fractionBars) {
     const top = renderInsideFraction(n, o);
     const bottom = renderInsideFraction(d, o);
-    const negative = top.startsWith('-');
+    // Hoisting a leading minus outside the bar is only valid when the whole
+    // numerator is negative. For a sum it changes the meaning: -(2+sqrt 24)/2
+    // is not (-2+sqrt 24)/2, and the second is what the tree says.
+    const numeratorIsSum = stripUnits(n).some((f) => f.k === 'add')
+      || (n.k === 'add');
+    const negative = top.startsWith('-') && !numeratorIsSum;
     return `${negative ? '-' : ''}\\frac{${negative ? top.slice(1) : top}}{${bottom}}`;
   }
   return renderProduct(factors(e), o);
 }
 
-/** A fraction bar already groups its contents, so nothing inside needs brackets. */
-function renderInsideFraction(e: Expr, o: Opts): string {
-  return e.k === 'mul' ? renderProduct(factors(e), o) : render(e, P.Rel, o);
+/** Factors that actually contribute, with the invisible 1s dropped. */
+function stripUnits(e: Expr): Expr[] {
+  return factors(e).filter((f) => !isOneE(f));
 }
 
-function renderProduct(fs: readonly Expr[], o: Opts): string {
+/**
+ * A fraction bar already groups its contents, so nothing inside needs
+ * brackets. The unit factors have to go first: numerDenom leaves a 1 behind
+ * when it splits a rational coefficient, and a product of "1 and a sum" would
+ * otherwise be bracketed as though it were a real product.
+ */
+function renderInsideFraction(e: Expr, o: Opts): string {
+  const parts = stripUnits(e);
+  if (parts.length === 0) return '1';
+  if (parts.length === 1) return render(parts[0]!, P.Rel, o);
+  return renderProduct(parts, o);
+}
+
+/**
+ * Conventional factor order for display: numbers, then constants, symbols,
+ * powers, and brackets last. Multiplication commutes, so reordering is always
+ * safe, and without it a distribution step prints "x3" and "(x+3)x" instead of
+ * "3x" and "x(x+3)". Equal ranks keep their original relative order, so a step
+ * that genuinely rearranged factors still reads as a change.
+ */
+function displayOrder(fs: readonly Expr[]): Expr[] {
+  const rank = (e: Expr): number => {
+    switch (e.k) {
+      case 'num': return 0;
+      case 'const': return 1;
+      case 'sym': return 2;
+      case 'pow': return 3;
+      case 'fn': return 4;
+      case 'add': return 6;
+      default: return 5;
+    }
+  };
+  return fs.map((f, i) => ({ f, i })).sort((a, b) => rank(a.f) - rank(b.f) || a.i - b.i).map((x) => x.f);
+}
+
+function renderProduct(input: readonly Expr[], o: Opts): string {
+  const fs = displayOrder(input);
   const parts = fs.filter((f) => !isOneE(f));
   if (parts.length === 0) return '1';
   if (parts.length === 1) return render(parts[0]!, P.Mul, o);
@@ -173,12 +224,18 @@ function renderProduct(fs: readonly Expr[], o: Opts): string {
   const pieces = rest.map((f) => render(f, P.Mul, o));
   let out = pieces[0]!;
   for (let i = 1; i < pieces.length; i++) {
-    const prev = rest[i - 1]!;
-    const cur = rest[i]!;
     // A number followed by a number needs a visible dot; 2x does not.
-    const needsDot = o.explicitTimes && startsWithDigit(pieces[i]!) && endsWithDigit(out);
-    out = needsDot ? `${out} \\cdot ${pieces[i]}` : joinTex(out, pieces[i]!);
-    void prev; void cur;
+    // A dot is needed between two numbers, and between repeated factors where
+    // juxtaposition would read as a single squared symbol ("xx").
+    const repeated = key(rest[i]!) === key(rest[i - 1]!);
+    const cur = rest[i]!;
+    // A negative number after the first factor gets brackets, so that
+    // 4 * (-5) does not print as "4-5", which reads as a subtraction.
+    let piece = pieces[i]!;
+    if (cur.k === 'num' && R.isNeg(cur.v)) piece = `\\left(${piece}\\right)`;
+    const needsDot = o.explicitTimes
+      && (repeated || piece.startsWith('\\left(') || (startsWithDigit(piece) && endsWithDigit(out)));
+    out = needsDot ? `${out} \\cdot ${piece}` : joinTex(out, piece);
   }
   return prefix + out;
 }
@@ -285,7 +342,7 @@ function plainRaw(e: Expr): string {
     case 'mul': {
       const [n, d] = numerDenom(e);
       if (!isOneE(d)) return `${plain(n, P.Mul)}/${plain(d, P.Neg)}`;
-      const fs = factors(e).filter((f) => !isOneE(f));
+      const fs = displayOrder(factors(e)).filter((f) => !isOneE(f));
       const negIdx = fs.findIndex((f) => f.k === 'num' && f.v.n === -1n && f.v.d === 1n);
       if (negIdx >= 0) {
         const rest = fs.filter((_, i) => i !== negIdx);
