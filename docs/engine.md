@@ -113,3 +113,31 @@ numerator is negative. For a sum it changes the value: `-(2+√24)/2` is not
 Steps with no visible change must be dropped. Folding `(-1)·9` into `-9`
 changes the tree while the printed line stays `- 9`, producing a step that
 looks like the app did nothing.
+
+## Differentiation checks itself
+
+`deriv` nodes evaluate numerically, by a five-point central difference at
+300-bit working precision with h = 2⁻⁶⁰. Both truncation error (order h⁴) and
+roundoff (order 2⁻³⁰⁰/h) land around 2⁻²⁴⁰, far below the ~2⁻¹⁰⁰ the oracle
+compares at.
+
+The point is that the symbolic differentiator and the numeric one share no
+code. Every step of every differentiation derivation is compared against the
+finite difference at random points before the step exists, so a wrong rule
+throws during generation rather than reaching a student. It is the same
+guarantee as everywhere else in the engine, but here the second opinion is a
+genuinely independent method rather than a rearrangement of the same one.
+
+## Two bugs worth not reintroducing
+
+`evalExact` used to short-circuit a product to zero as soon as one factor was
+zero. That looks like a harmless optimisation and is not: it makes 0·(1/0)
+evaluate to 0 rather than raising, which silently turns an indeterminate form
+into an answer. It is exactly the case the limit solver has to detect, and it
+made every 0/0 limit report zero.
+
+`toExprPoly` used to skip a term it could not read as a polynomial rather than
+failing. So `sqrt(x)` came back as the zero polynomial, and every caller
+downstream — cancelling, factoring, `simplifyBest` — cheerfully reported that
+1/(2√x) simplifies to 0. Anything that cannot be read as a non-negative
+integer power of the variable must now return null for the whole conversion.

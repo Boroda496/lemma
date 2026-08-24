@@ -57,16 +57,18 @@ the caller redraws.
 
 ```
 npm run dev        vite, host-exposed for phone testing on the LAN
-npm test           281 tests, including property-based and simulation ones
+npm test           341 tests, including property-based and simulation ones
 npm run typecheck
 npm run build      production PWA
 node scripts/make-icons.mjs   regenerate the launcher icons
 ```
 
-## Coverage, honestly
+## Coverage
 
-34 of the 68 skills have generators. The rest appear on the map marked "Soon"
-and cannot be scheduled. Calculus and trigonometry are in the graph but have
-no problems yet; a symbolic differentiator with a step-by-step derivation is
-the natural next piece, since the rules are exactly the shape `derive.ts`
-already expects.
+All 68 skills have generators, arithmetic through definite integrals. 816
+generated problems verify clean.
+
+The differentiator is worth knowing about: `deriv` nodes evaluate numerically
+by five-point finite difference at 300-bit precision, so the oracle checks
+every symbolic differentiation step against a method sharing none of its code.
+A wrong rule throws at generation time.

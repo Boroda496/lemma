@@ -72,60 +72,42 @@ export function totalDegreeBound(e: Expr): number {
  * expressions. Returns null when `e` is not polynomial in `v`.
  */
 export function toExprPoly(e: Expr, v: string, maxDeg = 64): ExprPoly | null {
+  // Expand first so that (x+1)^2 and (x+1)(x+2) present as sums of monomials
+  // and the loop below only has to read powers of v out of a product.
+  const flat = expand(e);
   const acc: Expr[][] = [];
-  const push = (deg: number, term: Expr) => {
-    if (deg > maxDeg) throw new RangeError('degree too large');
-    while (acc.length <= deg) acc.push([]);
-    acc[deg]!.push(term);
-  };
 
-  const go = (node: Expr, deg: number, coeff: Expr[]): boolean => {
-    // Walks a product, accumulating the power of v and the leftover factors.
-    switch (node.k) {
-      case 'add': return false; // handled by the caller, which splits sums first
-      default: return true;
-    }
-  };
-  void go;
+  for (const t of terms(flat)) {
+    let deg = 0;
+    const rest: Expr[] = [];
 
-  try {
-    for (const t of terms(e)) {
-      let deg = 0;
-      const rest: Expr[] = [];
-      let bad = false;
-      for (const f of factors(t)) {
-        const [base, ex] = splitPow(f);
-        if (base.k === 'sym' && symKey(base) === v) {
-          if (ex.k !== 'num' || ex.v.d !== 1n || ex.v.n < 0n) { bad = true; break; }
-          deg += Number(ex.v.n);
-        } else if (hasSymbol(f, v)) {
-          // v appears nested — expand and retry once.
-          const expanded = expand(f);
-          if (key(expanded) === key(f)) { bad = true; break; }
-          const sub = toExprPoly(mul(expanded, ...rest), v, maxDeg);
-          if (sub === null) { bad = true; break; }
-          // Merge and continue with the remaining factors of this term.
-          const remaining = factors(t).slice(factors(t).indexOf(f) + 1);
-          const merged = sub.map((c) => (remaining.length ? mul(c, ...remaining) : c));
-          merged.forEach((c, i) => push(i + deg, c));
-          bad = true; // consumed this term already
-          break;
-        } else {
-          rest.push(f);
-        }
+    for (const f of factors(t)) {
+      const [base, ex] = splitPow(f);
+      if (base.k === 'sym' && symKey(base) === v) {
+        if (ex.k !== 'num' || ex.v.d !== 1n || ex.v.n < 0n) return null;
+        deg += Number(ex.v.n);
+        if (deg > maxDeg) return null;
+      } else if (hasSymbol(f, v)) {
+        // v appears somewhere that is not a non-negative integer power of it --
+        // inside a sqrt, a denominator, a sine. This is not a polynomial in v.
+        //
+        // Returning null here matters. An earlier version skipped the offending
+        // term instead, so sqrt(x) came back as the zero polynomial and every
+        // caller downstream -- cancelling, factoring, simplifyBest -- happily
+        // reported that 1/(2 sqrt x) simplifies to 0.
+        return null;
+      } else {
+        rest.push(f);
       }
-      if (bad) continue;
-      push(deg, rest.length ? mul(...rest) : E1);
     }
-  } catch {
-    return null;
+
+    while (acc.length <= deg) acc.push([]);
+    acc[deg]!.push(rest.length === 0 ? E1 : rest.length === 1 ? rest[0]! : mul(...rest));
   }
 
   if (acc.length === 0) return [E0];
-  // Anything still containing v after the split means the term was not polynomial.
-  const out = acc.map((parts) => (parts.length === 0 ? E0 : parts.length === 1 ? parts[0]! : add(...parts)));
-  if (out.some((c) => hasSymbol(c, v))) return null;
-  return out;
+  return acc.map((parts) =>
+    parts.length === 0 ? E0 : parts.length === 1 ? parts[0]! : add(...parts));
 }
 
 /** Numeric coefficients, or null if any coefficient is not an exact rational. */

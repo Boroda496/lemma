@@ -20,6 +20,7 @@ import * as A from './generators/algebra.ts';
 import * as G from './generators/geometry.ts';
 import * as S from './generators/statistics.ts';
 import * as F from './generators/functions.ts';
+import * as C from './generators/calculus.ts';
 
 /** skill id -> the generators that can produce problems for it. */
 const REGISTRY: Record<string, readonly Generator[]> = {
@@ -83,6 +84,22 @@ const REGISTRY: Record<string, readonly Generator[]> = {
   'logarithms': [F.genLogarithms],
   'exponential-equations': [F.genExponentialEquations],
   'sequences-series': [F.genSequences],
+
+  // trigonometry
+  'unit-circle': [G.genUnitCircle],
+  'trig-graphs': [G.genTrigGraphs],
+  'trig-identities': [G.genTrigIdentities],
+  'law-of-sines-cosines': [G.genLawOfSinesCosines],
+
+  // calculus
+  'limits': [C.genLimits],
+  'derivative-definition': [C.genDerivativeDefinition],
+  'derivative-power-rule': [C.genPowerRule],
+  'derivative-product-quotient': [C.genProductQuotient],
+  'derivative-chain-rule': [C.genChainRule],
+  'derivative-applications': [C.genDerivativeApplications],
+  'antiderivatives': [C.genAntiderivatives],
+  'definite-integrals': [C.genDefiniteIntegrals],
 
   // statistics
   'mean-median-mode': [S.genCentreAndSpread],

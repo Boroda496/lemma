@@ -53,7 +53,7 @@ factorisations checked for value preservation, simulated learners run over
 ```
 npm install
 npm run dev      # http://localhost:5173
-npm test         # 281 tests
+npm test         # 341 tests
 npm run build    # production PWA
 ```
 
@@ -65,8 +65,8 @@ desktop and tablet app.
 
 - **Practise** — the scheduler picks what to work on and how hard, aiming at
   about an 80% success rate. Hints ladder from a nudge to the full solution.
-- **Map** — 68 skills across seven strands, with prerequisites. 34 have
-  problems today; the rest are shown as "Soon" rather than silently missing.
+- **Map** — 68 skills across seven strands, with prerequisites, from signed
+  numbers to definite integrals. All 68 have problems.
 - **Scratchpad** — type any expression and see it simplified, expanded,
   factored, solved, and graphed, with the working.
 - **Progress** — what is durable, what is due, how the last stretch went.
@@ -82,7 +82,7 @@ src/curriculum/  skills, problem generators, grading
 src/mastery/     ratings, spaced repetition, the scheduler
 src/store/       IndexedDB
 src/ui/          React
-tests/           281 tests, including property-based ones
+tests/           341 tests, including property-based ones
 docs/            deeper notes on each subsystem
 ```
 

@@ -25,6 +25,7 @@ import { simplify, simplifyBest } from './../../engine/canon.ts';
 import { toLatex } from './../../engine/print.ts';
 import {
   DerivationBuilder, R_FORMULA, R_PYTHAGORAS, R_SIMPLIFY, R_ARITHMETIC, R_SUBSTITUTE, R_SUB_BOTH,
+  R_TRIG_IDENTITY,
 } from './../../engine/derive.ts';
 import type { Generator, Figure, Distractor } from './../types.ts';
 
@@ -870,5 +871,191 @@ export const genTransformations: Generator = ({ difficulty: d, seed }) => {
         reviewSkill: 'transformations',
       }],
     } : {}),
+  };
+};
+
+// ------------------------------------------------------------- trigonometry
+
+/** The standard angles, as a fraction of pi, with their exact sine and cosine. */
+const UNIT_CIRCLE: ReadonlyArray<{ deg: number; num: number; den: number }> = [
+  { deg: 0, num: 0, den: 1 }, { deg: 30, num: 1, den: 6 }, { deg: 45, num: 1, den: 4 },
+  { deg: 60, num: 1, den: 3 }, { deg: 90, num: 1, den: 2 }, { deg: 120, num: 2, den: 3 },
+  { deg: 135, num: 3, den: 4 }, { deg: 150, num: 5, den: 6 }, { deg: 180, num: 1, den: 1 },
+  { deg: 210, num: 7, den: 6 }, { deg: 225, num: 5, den: 4 }, { deg: 240, num: 4, den: 3 },
+  { deg: 270, num: 3, den: 2 }, { deg: 300, num: 5, den: 3 }, { deg: 315, num: 7, den: 4 },
+  { deg: 330, num: 11, den: 6 },
+];
+
+export const genUnitCircle: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const pool = d > 0.5 ? UNIT_CIRCLE : UNIT_CIRCLE.slice(0, 9);
+  const angle = r.pick(pool);
+  const which = r.pick(d > 0.4 ? (['sin', 'cos', 'tan'] as const) : (['sin', 'cos'] as const));
+
+  const radians = mul(frac(angle.num, angle.den), cst('pi'));
+  const statement = mkFn(which, radians);
+  const value = simplify(statement);
+  // tan is undefined at the odd multiples of pi/2.
+  if (value.k === 'const' && value.name === 'nan') return null;
+  if (key(value) === key(statement)) return null;
+
+  const b = new DerivationBuilder('Evaluate exactly', statement);
+  b.apply(R_SIMPLIFY, value,
+    `${angle.deg}° is ${angle.num}/${angle.den} of π. ` +
+    (which === 'tan'
+      ? `tan is sin over cos, and at this angle that gives ${toLatex(value)}.`
+      : `On the unit circle, ${which === 'cos' ? 'cosine is the x-coordinate' : 'sine is the y-coordinate'}, ` +
+        `which here is ${toLatex(value)}.`),
+    'Where does this angle land on the unit circle?');
+
+  return {
+    prompt: 'Give the exact value',
+    context: `The angle is ${angle.deg}°, which is $${toLatex(radians)}$ radians.`,
+    statement,
+    answer: { kind: 'expression' as const, value },
+    derivation: b.build(),
+    figure: {
+      kind: 'circle', toScale: true,
+      points: {
+        O: [0, 0],
+        P: [100 * Math.cos((angle.deg * Math.PI) / 180), 100 * Math.sin((angle.deg * Math.PI) / 180)],
+      },
+      segments: [['O', 'P']],
+      circles: [{ center: 'O', radius: 100 }],
+      caption: `The angle ${angle.deg}° on the unit circle.`,
+    },
+  };
+};
+
+export const genTrigGraphs: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const base = r.pick(['sin', 'cos'] as const);
+  const amplitude = r.int(1, scale(d, 4, 6));
+  const frequency = r.int(1, scale(d, 3, 4));
+  const statement = mul(int(amplitude), mkFn(base, mul(int(frequency), X)));
+  const want = r.pick(d > 0.4 ? (['amplitude', 'period'] as const) : (['amplitude'] as const));
+
+  const period = simplifyBest(divE(mul(int(2), cst('pi')), int(frequency)));
+  const value = want === 'amplitude' ? int(amplitude) : period;
+
+  const b = new DerivationBuilder(want === 'amplitude' ? 'Find the amplitude' : 'Find the period', statement);
+  b.applyUnverified(R_FORMULA, value,
+    'Reading a feature off a graph produces a number, not a restatement of the function.',
+    want === 'amplitude'
+      ? `The number multiplying ${base} stretches the graph vertically, so the amplitude is ${amplitude}.`
+      : `The coefficient of x squeezes the graph horizontally: the period is 2π divided by ${frequency}.`,
+    want === 'amplitude' ? 'What stretches it up and down?' : 'How long before it repeats?');
+
+  return {
+    prompt: want === 'amplitude' ? 'Find the amplitude' : 'Find the period',
+    context: `y = $${toLatex(statement)}$`,
+    statement, variable: 'x',
+    answer: { kind: 'expression' as const, value },
+    derivation: b.build(),
+    ...(want === 'period' ? {
+      distractors: [{
+        value: mul(int(2), cst('pi'), int(frequency)),
+        diagnosis: `The coefficient was multiplied instead of divided. A larger coefficient squeezes the graph, so the period gets shorter.`,
+        reviewSkill: 'trig-graphs',
+      }],
+    } : {}),
+  };
+};
+
+export const genTrigIdentities: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const kind = r.pick(d > 0.45
+    ? (['pythagorean', 'double-sin', 'double-cos', 'quotient'] as const)
+    : (['pythagorean', 'quotient'] as const));
+
+  let statement: Expr;
+  let value: Expr;
+  let detail: string;
+
+  switch (kind) {
+    case 'pythagorean': {
+      const known = r.pick([['sin', 'cos'], ['cos', 'sin']] as const);
+      statement = subE(int(1), pow(mkFn(known[0], X), int(2)));
+      value = pow(mkFn(known[1], X), int(2));
+      detail = `Since sin²x + cos²x = 1, rearranging gives 1 − ${known[0]}²x = ${known[1]}²x.`;
+      break;
+    }
+    case 'double-sin':
+      statement = mul(int(2), mkFn('sin', X), mkFn('cos', X));
+      value = mkFn('sin', mul(int(2), X));
+      detail = 'This is the double-angle formula: 2 sin x cos x = sin 2x.';
+      break;
+    case 'double-cos':
+      statement = subE(pow(mkFn('cos', X), int(2)), pow(mkFn('sin', X), int(2)));
+      value = mkFn('cos', mul(int(2), X));
+      detail = 'This is the double-angle formula: cos²x − sin²x = cos 2x.';
+      break;
+    default:
+      statement = divE(mkFn('sin', X), mkFn('cos', X));
+      value = mkFn('tan', X);
+      detail = 'Sine over cosine is the definition of tangent.';
+      break;
+  }
+
+  const b = new DerivationBuilder('Simplify', statement);
+  b.apply(R_TRIG_IDENTITY, value, detail, 'Which standard identity looks like this?');
+
+  return {
+    prompt: 'Write this more simply using a standard identity',
+    statement, variable: 'x',
+    answer: { kind: 'expression' as const, value },
+    derivation: b.build(),
+  };
+};
+
+export const genLawOfSinesCosines: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  // A triangle with two sides and the angle between them: the law of cosines.
+  const a = r.int(3, scale(d, 9, 15));
+  const b2 = r.int(3, scale(d, 9, 15));
+  const angle = r.pick([60, 90, 120]);
+  const cosValue = angle === 60 ? R.rat(1, 2) : angle === 90 ? R.ZERO : R.rat(-1, 2);
+
+  const cSquared = R.sub(R.add(R.rat(a * a), R.rat(b2 * b2)), R.mul(R.rat(2 * a * b2), cosValue));
+  const value = simplify(sqrtE(num(cSquared)));
+
+  const formula = equation(
+    pow(sym('c'), int(2)),
+    subE(add(pow(sym('a'), int(2)), pow(sym('b'), int(2))),
+      mul(int(2), sym('a'), sym('b'), mkFn('cos', sym('C')))),
+  );
+  const substituted = equation(
+    pow(X, int(2)),
+    subE(add(pow(int(a), int(2)), pow(int(b2), int(2))),
+      mul(int(2), int(a), int(b2), num(cosValue))),
+  );
+
+  const bd = new DerivationBuilder('Find the third side', formula);
+  bd.applyUnverified(R_FORMULA, substituted,
+    'Substituting the given measurements replaces the general law with this triangle.',
+    `With a = ${a}, b = ${b2} and C = ${angle}°, and cos ${angle}° = ${R.toString(cosValue)}.`,
+    'Which law relates two sides and the angle between them?');
+  bd.apply(R_ARITHMETIC, equation(pow(X, int(2)), num(cSquared)),
+    `That comes to ${R.toString(cSquared)}.`, 'Work out the right-hand side.');
+  bd.applyUnverified(R_SIMPLIFY, equation(X, value),
+    'A length is positive, so only the positive root is taken.',
+    `Take the square root: x = ${toLatex(value)}.`, 'Undo the square.');
+
+  return {
+    prompt: 'Find the third side, exactly',
+    context: `A triangle has sides ${a} and ${b2} with an angle of ${angle}° between them.`,
+    statement: formula, variable: 'x',
+    answer: { kind: 'number' as const, value },
+    derivation: bd.build(),
+    figure: {
+      kind: 'triangle', toScale: true,
+      points: {
+        A: [0, 0], B: [a * 14, 0],
+        C: [b2 * 14 * Math.cos((angle * Math.PI) / 180), b2 * 14 * Math.sin((angle * Math.PI) / 180)],
+      },
+      segments: [['A', 'B'], ['B', 'C'], ['C', 'A']],
+      sideLabels: { AB: `${a}`, CA: `${b2}`, BC: 'x' },
+      angleLabels: { A: `${angle}°` },
+    },
   };
 };

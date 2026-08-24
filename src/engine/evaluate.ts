@@ -59,11 +59,15 @@ export function evalExact(e: Expr, env: ExactEnv = {}): Rat | null {
       return acc;
     }
     case 'mul': {
+      // Every factor is evaluated before the result is decided. Short-circuiting
+      // on a zero factor looks like a harmless optimisation and is not: it
+      // makes 0 * (1/0) evaluate to 0 rather than raising, which silently turns
+      // an indeterminate form into an answer. That is exactly the case the
+      // limit solver has to detect.
       let acc = R.ONE;
       for (const a of e.args) {
         const v = evalExact(a, env);
         if (v === null) return null;
-        if (R.isZero(v)) return R.ZERO;
         acc = R.mul(acc, v);
       }
       return acc;
@@ -229,6 +233,9 @@ export function evalNumeric(e: Expr, env: NumericEnv = {}, prec: number = B.PREC
       return CX.powC(b, x, prec);
     }
     case 'fn':
+      // Derivatives need the unevaluated argument, so they are handled before
+      // the arguments are evaluated.
+      if (e.name === 'deriv') return evalDerivative(e.args, env, prec);
       return evalNumericFn(e.name, e.args.map((a) => evalNumeric(a, env, prec)), prec, e.args, env);
     case 'rel': {
       // A relation evaluates to the difference of its sides; zero means it holds.
@@ -338,6 +345,16 @@ function evalNumericFn(
       if (y === 0) throw new UndefinedAtPoint('mod by zero');
       return CX.real(B.fromNumber(x - y * Math.floor(x / y)));
     }
+    case 'deriv': {
+      // A derivative is evaluated by finite difference, which makes the
+      // symbolic differentiator checkable against something that does not
+      // share its code. A five-point stencil at 300-bit working precision with
+      // h = 2^-60 leaves both truncation error (order h^4) and roundoff
+      // (order 2^-300/h) around 2^-240, far below the ~2^-100 the equivalence
+      // oracle compares at -- so a differentiation step that is wrong in the
+      // 30th digit is still caught.
+      throw new UndefinedAtPoint('derivative handled before argument evaluation');
+    }
     case 'factorial': case 'binom': case 'gcd': case 'lcm': {
       // Integer-only functions: fall back to the exact path, which is the
       // only place they are meaningfully defined.
@@ -353,6 +370,45 @@ function evalNumericFn(
     default:
       throw new UndefinedAtPoint(`no numeric rule for ${name}`);
   }
+}
+
+/** Working precision for finite differences. See the note in evalNumericFn. */
+const DERIV_PREC = 300;
+const DERIV_STEP_EXP = -60;
+
+/**
+ * d/dx f, evaluated at a point by a five-point central difference:
+ *
+ *   f'(x) ~ [ f(x-2h) - 8 f(x-h) + 8 f(x+h) - f(x+2h) ] / (12 h)
+ *
+ * This exists so that the symbolic differentiator can be verified against a
+ * method that shares none of its code. If a differentiation rule is wrong, the
+ * two disagree at a random point and the step is rejected.
+ */
+function evalDerivative(args: readonly Expr[], env: NumericEnv, prec: number): C {
+  const [body, variableExpr, pointExpr] = args;
+  if (!body || !variableExpr || variableExpr.k !== 'sym') {
+    throw new UndefinedAtPoint('a derivative needs an expression and a variable');
+  }
+  const variable = symKey(variableExpr);
+  const at = pointExpr ? evalNumeric(pointExpr, env, DERIV_PREC) : env[variable];
+  if (at === undefined) throw new UndefinedAtPoint(`no value for ${variable}`);
+
+  const h: C = { re: { m: 1n, e: DERIV_STEP_EXP }, im: B.BF_ZERO };
+  const sample = (k: number): C => {
+    const offset = CX.mul(CX.fromInt(k), h, DERIV_PREC);
+    return evalNumeric(body, { ...env, [variable]: CX.add(at, offset, DERIV_PREC) }, DERIV_PREC);
+  };
+
+  const numerator = CX.add(
+    CX.sub(sample(-2), CX.mul(CX.fromInt(8), sample(-1), DERIV_PREC), DERIV_PREC),
+    CX.sub(CX.mul(CX.fromInt(8), sample(1), DERIV_PREC), sample(2), DERIV_PREC),
+    DERIV_PREC,
+  );
+  const denominator = CX.mul(CX.fromInt(12), h, DERIV_PREC);
+  const result = CX.div(numerator, denominator, DERIV_PREC);
+  // Hand back at the caller's precision so downstream comparisons are uniform.
+  return { re: B.round(result.re.m, result.re.e, prec), im: B.round(result.im.m, result.im.e, prec) };
 }
 
 /** Convenience: real-valued double, for plotting only. Never for grading. */
