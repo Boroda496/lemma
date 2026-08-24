@@ -740,3 +740,135 @@ export const genLinesAndSlope: Generator = ({ difficulty: d, seed }) => {
     derivation: b.build(),
   };
 };
+
+// ------------------------------------------------- second wave of generators
+
+export const genParallelLines: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const given = r.int(35, 145);
+  const relation = r.pick(d > 0.4
+    ? (['corresponding', 'alternate', 'co-interior'] as const)
+    : (['corresponding', 'alternate'] as const));
+
+  const answer = relation === 'co-interior' ? 180 - given : given;
+  const because = relation === 'corresponding'
+    ? 'Corresponding angles sit in the same position at each crossing, so they are equal.'
+    : relation === 'alternate'
+      ? 'Alternate angles sit on opposite sides of the transversal between the parallels, so they are equal.'
+      : 'Co-interior angles are on the same side between the parallels, so they add to 180°.';
+
+  const statement = relation === 'co-interior'
+    ? equation(add(int(given), X), int(180))
+    : equation(X, int(given));
+
+  const b = new DerivationBuilder('Find x', statement);
+  if (relation === 'co-interior') {
+    b.apply(R_SUB_BOTH, equation(X, int(answer)),
+      `${because} So x = 180 − ${given} = ${answer}.`,
+      'Which side of the transversal are the two angles on?');
+  } else {
+    b.applyUnverified(R_FORMULA, equation(X, int(answer)),
+      'The equality is read off the diagram, not derived from the given number.',
+      `${because} So x = ${given}.`,
+      'Where does each angle sit relative to the parallel lines?');
+  }
+
+  // Two parallel lines crossed by a slanted transversal.
+  const slant = 46;
+  const figure: Figure = {
+    kind: 'angles', toScale: true,
+    points: {
+      A: [-140, 70], B: [140, 70],      // upper parallel
+      C: [-140, -70], D: [140, -70],    // lower parallel
+      P: [-slant, 70], Q: [slant, -70], // the transversal's crossings
+      T1: [-slant - 90, 70 + 120], T2: [slant + 90, -70 - 120],
+    },
+    segments: [['A', 'B'], ['C', 'D'], ['T1', 'T2']],
+    angleLabels: { P: `${given}°`, Q: 'x' },
+    caption: 'The two horizontal lines are parallel.',
+  };
+
+  return {
+    prompt: 'Find the marked angle',
+    context: `These are ${relation.replace('-', ' ')} angles.`,
+    statement, variable: 'x', figure,
+    answer: { kind: 'number' as const, value: int(answer), unit: '°' },
+    derivation: b.build(),
+    distractors: [{
+      value: int(relation === 'co-interior' ? given : 180 - given),
+      diagnosis: relation === 'co-interior'
+        ? 'Co-interior angles add to 180°, they are not equal. The equal pairs are the corresponding and alternate ones.'
+        : 'That is the angle next to it on the straight line. Corresponding and alternate angles are equal, not supplementary.',
+      reviewSkill: 'parallel-lines',
+    }],
+  };
+};
+
+export const genTransformations: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const kind = r.pick(d > 0.45
+    ? (['translate', 'reflect-x', 'reflect-y', 'rotate180', 'dilate'] as const)
+    : (['translate', 'reflect-x', 'reflect-y'] as const));
+
+  const px = r.nonzeroInt(-8, 8);
+  const py = r.nonzeroInt(-8, 8);
+  const dx = r.nonzeroInt(-6, 6);
+  const dy = r.nonzeroInt(-6, 6);
+  const k = r.int(2, 3);
+
+  let out: [number, number];
+  let rule: string;
+  let detail: string;
+  switch (kind) {
+    case 'translate':
+      out = [px + dx, py + dy];
+      rule = `translated ${Math.abs(dx)} ${dx > 0 ? 'right' : 'left'} and ${Math.abs(dy)} ${dy > 0 ? 'up' : 'down'}`;
+      detail = `Add the shift to each coordinate: (${px} + ${dx}, ${py} + ${dy}).`;
+      break;
+    case 'reflect-x':
+      out = [px, -py];
+      rule = 'reflected in the x-axis';
+      detail = 'Reflecting in the x-axis keeps x and negates y.';
+      break;
+    case 'reflect-y':
+      out = [-px, py];
+      rule = 'reflected in the y-axis';
+      detail = 'Reflecting in the y-axis negates x and keeps y.';
+      break;
+    case 'rotate180':
+      out = [-px, -py];
+      rule = 'rotated 180° about the origin';
+      detail = 'A half turn about the origin negates both coordinates.';
+      break;
+    default:
+      out = [px * k, py * k];
+      rule = `dilated by a factor of ${k} from the origin`;
+      detail = `A dilation from the origin multiplies both coordinates by ${k}.`;
+      break;
+  }
+
+  const statement = tuple(int(px), int(py));
+  const b = new DerivationBuilder('Find the image', statement);
+  b.applyUnverified(R_SUBSTITUTE, tuple(int(out[0]), int(out[1])),
+    'Applying a transformation produces a different point, not a restatement of the first.',
+    detail, 'What does this transformation do to each coordinate?');
+
+  return {
+    prompt: `The point (${px}, ${py}) is ${rule}. Where does it land?`,
+    statement,
+    figure: {
+      kind: 'coordinate', toScale: true,
+      points: { P: [px, py], 'P′': [out[0], out[1]] },
+      caption: `P (${px}, ${py}) and its image.`,
+    },
+    answer: { kind: 'tuple' as const, values: [int(out[0]), int(out[1])], labels: ['x', 'y'] },
+    derivation: b.build(),
+    ...(kind === 'reflect-x' || kind === 'reflect-y' ? {
+      distractors: [{
+        value: kind === 'reflect-x' ? tuple(int(-px), int(py)) : tuple(int(px), int(-py)),
+        diagnosis: 'The wrong coordinate was negated. Reflecting in an axis leaves the coordinate along that axis alone.',
+        reviewSkill: 'transformations',
+      }],
+    } : {}),
+  };
+};

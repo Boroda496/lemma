@@ -18,6 +18,7 @@ import { verifyProblem } from './check.ts';
 import { ALL_SKILLS, getSkill } from './skills.ts';
 import * as A from './generators/algebra.ts';
 import * as G from './generators/geometry.ts';
+import * as S from './generators/statistics.ts';
 
 /** skill id -> the generators that can produce problems for it. */
 const REGISTRY: Record<string, readonly Generator[]> = {
@@ -27,6 +28,8 @@ const REGISTRY: Record<string, readonly Generator[]> = {
   'fractions': [A.genFractions],
   'exponent-rules': [A.genExponentRules],
   'radicals': [A.genRadicals],
+  'prime-factorization': [A.genPrimeFactorization],
+  'decimals-percents': [A.genDecimalsPercents],
 
   // algebra
   'evaluate-expressions': [A.genEvaluateExpressions],
@@ -47,6 +50,12 @@ const REGISTRY: Record<string, readonly Generator[]> = {
   'completing-the-square': [A.genCompletingTheSquare],
   'quadratic-formula': [A.genQuadraticFormula],
   'rational-expressions': [A.genRationalExpressions],
+  'proportions': [A.genProportions],
+  'absolute-value-equations': [A.genAbsoluteValue],
+  'radical-equations': [A.genRadicalEquations],
+  'rational-equations': [A.genRationalEquations],
+  'polynomial-arithmetic': [A.genPolynomialArithmetic],
+  'factoring-cubics': [A.genFactoringCubics],
 
   // geometry
   'angles': [G.genAngles],
@@ -60,6 +69,13 @@ const REGISTRY: Record<string, readonly Generator[]> = {
   'lines-and-slope': [G.genLinesAndSlope],
   'similar-triangles': [G.genSimilarTriangles],
   'right-triangle-trig': [G.genRightTriangleTrig],
+  'parallel-lines': [G.genParallelLines],
+  'transformations': [G.genTransformations],
+
+  // statistics
+  'mean-median-mode': [S.genCentreAndSpread],
+  'probability-basics': [S.genProbability],
+  'counting': [S.genCounting],
 };
 
 export const hasGenerator = (skillId: string): boolean => (REGISTRY[skillId]?.length ?? 0) > 0;

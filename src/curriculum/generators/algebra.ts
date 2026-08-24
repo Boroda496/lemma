@@ -24,6 +24,7 @@ import { DerivationBuilder, R_SIMPLIFY, R_FACTOR_OUT, R_FORMULA, R_SUBSTITUTE } 
 import { simplifyDerivation, expandDerivation } from './../../engine/solve/steps.ts';
 import { solveLinear, solveLinearSystem } from './../../engine/solve/linear.ts';
 import { solveQuadratic } from './../../engine/solve/quadratic.ts';
+import { solveAbsolute, solveRadical, solveRational } from './../../engine/solve/equations.ts';
 import type { Generator, GeneratorContext, Distractor } from './../types.ts';
 
 /** Scale a range by difficulty: easy problems use small numbers. */
@@ -677,5 +678,307 @@ export const genLiteralEquations: Generator = ({ difficulty: d, seed }) => {
     variable: chosen.solveFor,
     answer: { kind: 'expression' as const, value: solved.derivation.result },
     derivation: solved.derivation,
+  };
+};
+
+// ------------------------------------------------- second wave of generators
+
+export const genPrimeFactorization: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const want = r.pick(d > 0.4 ? (['factorize', 'gcf', 'lcm'] as const) : (['factorize', 'gcf'] as const));
+  const primes = [2, 3, 5, 7, 11, 13];
+
+  if (want === 'factorize') {
+    const n = r.int(2, d > 0.5 ? 5 : 3);
+    let value = 1;
+    const used: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const p = r.pick(primes.slice(0, d > 0.5 ? 6 : 3));
+      value *= p;
+      used.push(p);
+    }
+    if (value < 8 || value > 4000) return null;
+    used.sort((a, b) => a - b);
+    const answer = mul(...used.map((p) => int(p)));
+    const b = new DerivationBuilder('Factor into primes', int(value));
+    b.apply(R_FACTOR_OUT, answer,
+      `Divide out the smallest prime repeatedly: ${value} = ${used.join(' × ')}.`,
+      'Start dividing by 2, then 3, then 5, and so on.');
+    return {
+      prompt: 'Write as a product of primes', statement: int(value),
+      answer: { kind: 'expression' as const, value: answer }, derivation: b.build(),
+    };
+  }
+
+  const a = r.int(2, scale(d, 8, 14)) * r.pick([2, 3, 4, 6]);
+  const b2 = r.int(2, scale(d, 8, 14)) * r.pick([2, 3, 4, 6]);
+  if (a === b2) return null;
+  const g = Number(gcdNum(a, b2));
+  const l = (a * b2) / g;
+  const value = want === 'gcf' ? g : l;
+  const statement = mkFn(want === 'gcf' ? 'gcd' : 'lcm', int(a), int(b2));
+
+  const bd = new DerivationBuilder(want === 'gcf' ? 'Find the GCF' : 'Find the LCM', statement);
+  bd.apply(R_SIMPLIFY, int(value),
+    want === 'gcf'
+      ? `The largest number dividing both ${a} and ${b2} is ${g}.`
+      : `The smallest number both ${a} and ${b2} divide into is ${l}. It equals ${a} × ${b2} ÷ ${g}.`,
+    want === 'gcf' ? 'What do they share?' : 'What do they both divide into?');
+
+  return {
+    prompt: want === 'gcf'
+      ? `Find the greatest common factor of ${a} and ${b2}`
+      : `Find the least common multiple of ${a} and ${b2}`,
+    statement,
+    answer: { kind: 'number' as const, value: int(value) },
+    derivation: bd.build(),
+    distractors: want === 'gcf' ? [{
+      value: int(l),
+      diagnosis: 'That is the least common multiple — the smallest number they both go into. The greatest common factor is the largest number that goes into both.',
+      reviewSkill: 'prime-factorization',
+    }] : [],
+  };
+};
+
+export const genDecimalsPercents: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const kind = r.pick(d > 0.45 ? (['of', 'increase', 'convert'] as const) : (['of', 'convert'] as const));
+
+  if (kind === 'convert') {
+    const den = r.pick([2, 4, 5, 8, 10, 20, 25]);
+    const numr = r.nonzeroInt(1, den - 1);
+    const percent = R.mul(R.rat(numr, den), R.rat(100));
+    const statement = frac(numr, den);
+    const b = new DerivationBuilder('Convert to a percentage', statement);
+    b.apply(R_SIMPLIFY, num(percent),
+      `Multiply by 100: ${numr}/${den} × 100 = ${R.toString(percent)}.`,
+      'A percentage is the fraction out of 100.');
+    return {
+      prompt: 'Write this as a percentage (just the number)',
+      statement,
+      answer: { kind: 'number' as const, value: num(percent), unit: '%' },
+      derivation: b.build(),
+    };
+  }
+
+  const percent = r.pick([5, 10, 12, 15, 20, 25, 30, 40, 50, 60, 75]);
+  const base = r.int(2, scale(d, 12, 40)) * r.pick([4, 5, 10, 20]);
+  const fraction = R.rat(percent, 100);
+
+  if (kind === 'of') {
+    const value = R.mul(fraction, R.rat(base));
+    const statement = mul(num(fraction), int(base));
+    const b = new DerivationBuilder(`Find ${percent}% of ${base}`, statement);
+    b.apply(R_SIMPLIFY, num(value),
+      `${percent}% is ${R.toString(fraction)}, and ${R.toString(fraction)} × ${base} = ${R.toString(value)}.`,
+      'Turn the percentage into a fraction first.');
+    return {
+      prompt: `What is ${percent}% of ${base}?`, statement,
+      answer: { kind: 'number' as const, value: num(value) }, derivation: b.build(),
+    };
+  }
+
+  const grown = R.mul(R.add(R.ONE, fraction), R.rat(base));
+  const statement = mul(add(int(1), num(fraction)), int(base));
+  const b = new DerivationBuilder(`Increase ${base} by ${percent}%`, statement);
+  b.apply(R_SIMPLIFY, num(grown),
+    `An increase of ${percent}% multiplies by ${R.toString(R.add(R.ONE, fraction))}, ` +
+    `giving ${R.toString(grown)}.`,
+    'An increase multiplies by more than 1.');
+  return {
+    prompt: `Increase ${base} by ${percent}%`, statement,
+    answer: { kind: 'number' as const, value: num(grown) }, derivation: b.build(),
+    distractors: [{
+      value: num(R.mul(fraction, R.rat(base))),
+      diagnosis: `That is ${percent}% of ${base}, which is the increase itself. The question asks for the new total, so add it on.`,
+      reviewSkill: 'decimals-percents',
+    }],
+  };
+};
+
+export const genProportions: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const k = r.int(2, scale(d, 4, 8));
+  const a = r.int(2, scale(d, 6, 11));
+  const b2 = r.int(2, scale(d, 6, 11));
+  if (a === b2) return null;
+  const statement = equation(divE(int(a), int(b2)), divE(X, int(b2 * k)));
+  const solved = solveLinear(statement, 'x');
+  if (solved.solutions.length !== 1) return null;
+
+  return {
+    prompt: 'Solve for x', statement, variable: 'x',
+    answer: { kind: 'expression' as const, value: solved.solutions[0]! },
+    derivation: solved.derivation,
+    distractors: [{
+      value: int(a + (b2 * k - b2)),
+      diagnosis: 'The two sides were compared by adding rather than by scaling. A proportion says the ratios match, so both parts multiply by the same factor.',
+      reviewSkill: 'proportions',
+    }],
+  };
+};
+
+export const genAbsoluteValue: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const a = r.nonzeroInt(1, scale(d, 3, 5));
+  const b = r.int(-scale(d, 6, 12), scale(d, 6, 12));
+  const target = r.bool(0.15) ? -r.int(1, 9) : r.int(0, scale(d, 9, 20));
+  const statement = equation(mkFn('abs', add(mul(int(a), X), int(b))), int(target));
+
+  const solved = solveAbsolute(statement, 'x');
+  if (solved.special === 'no-solution') {
+    return {
+      prompt: 'Solve for x', statement, variable: 'x',
+      answer: { kind: 'special' as const, value: 'no-solution' as const },
+      derivation: solved.derivation,
+    };
+  }
+  if (solved.solutions.length === 0) return null;
+
+  return {
+    prompt: 'Solve for x', statement, variable: 'x',
+    answer: { kind: 'set' as const, values: solved.solutions },
+    derivation: solved.derivation,
+    ...(solved.solutions.length === 2 ? {
+      distractors: [{
+        value: solved.solutions[0]!,
+        diagnosis: 'That is one of the two answers. Absolute value measures distance from zero, so there are two values the same distance away.',
+        reviewSkill: 'absolute-value-equations',
+      }],
+    } : {}),
+  };
+};
+
+export const genRadicalEquations: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  // Build from a known root so the equation has a clean answer, and let the
+  // squaring introduce an extraneous one about half the time.
+  const withExtraneous = d > 0.5 && r.bool(0.5);
+  if (withExtraneous) {
+    const shift = r.int(2, scale(d, 4, 7));
+    const statement = equation(sqrtE(add(X, int(shift))), subE(X, int(shift)));
+    const solved = solveRadical(statement, 'x');
+    if (solved.solutions.length !== 1) return null;
+    return {
+      prompt: 'Solve for x. Check your answer.', statement, variable: 'x',
+      answer: { kind: 'set' as const, values: solved.solutions },
+      derivation: solved.derivation,
+    };
+  }
+
+  const root = r.int(2, scale(d, 7, 14));
+  const a = r.int(1, scale(d, 3, 5));
+  const b = r.int(-scale(d, 4, 9), scale(d, 4, 9));
+  const inner = a * root * root + b;
+  if (inner < 0) return null;
+  const statement = equation(sqrtE(add(mul(int(a), X), int(b))), int(root));
+  const solved = solveRadical(statement, 'x');
+  if (solved.solutions.length !== 1) return null;
+
+  return {
+    prompt: 'Solve for x', statement, variable: 'x',
+    answer: { kind: 'expression' as const, value: solved.solutions[0]! },
+    derivation: solved.derivation,
+  };
+};
+
+export const genRationalEquations: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const shape = r.pick(d > 0.5 ? (['cross', 'sum', 'extraneous'] as const) : (['cross', 'sum'] as const));
+
+  let statement: Expr;
+  if (shape === 'cross') {
+    const a = r.nonzeroInt(1, scale(d, 4, 8));
+    const b = r.nonzeroInt(1, scale(d, 4, 8));
+    const p = r.nonzeroInt(-scale(d, 4, 7), scale(d, 4, 7));
+    const q = r.nonzeroInt(-scale(d, 4, 7), scale(d, 4, 7));
+    if (p === q) return null;
+    statement = equation(divE(int(a), add(X, int(p))), divE(int(b), add(X, int(q))));
+  } else if (shape === 'sum') {
+    const a = r.nonzeroInt(1, scale(d, 4, 8));
+    const den = r.nonzeroInt(2, scale(d, 4, 8));
+    const total = r.nonzeroInt(1, scale(d, 4, 8));
+    statement = equation(add(divE(int(a), X), frac(1, den)), frac(total, den * 2));
+  } else {
+    // A denominator that vanishes at the candidate: the classic extraneous case.
+    const c = r.nonzeroInt(1, scale(d, 4, 8));
+    statement = equation(divE(X, subE(X, int(c))), divE(int(c), subE(X, int(c))));
+  }
+
+  const solved = solveRational(statement, 'x');
+  if (solved.special === 'no-solution' || solved.solutions.length === 0) {
+    if (shape !== 'extraneous') return null;
+    return {
+      prompt: 'Solve for x. Check for values that are not allowed.', statement, variable: 'x',
+      answer: { kind: 'special' as const, value: 'no-solution' as const },
+      derivation: solved.derivation,
+    };
+  }
+  if (solved.solutions.length !== 1) return null;
+
+  return {
+    prompt: 'Solve for x', statement, variable: 'x',
+    answer: { kind: 'expression' as const, value: solved.solutions[0]! },
+    derivation: solved.derivation,
+  };
+};
+
+export const genPolynomialArithmetic: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const op = r.pick(d > 0.55 ? (['add', 'multiply', 'divide'] as const) : (['add', 'multiply'] as const));
+
+  const p1 = add(mul(int(coef(r, d, 6)), pow(X, int(2))), mul(int(coef(r, d, 8)), X), int(coef(r, d, 9)));
+  const p2 = add(mul(int(coef(r, d, 5)), X), int(coef(r, d, 8)));
+
+  if (op === 'divide') {
+    // Build a clean division by multiplying first, so the quotient is exact.
+    const quotient = add(mul(int(r.nonzeroInt(1, 4)), X), int(coef(r, d, 7)));
+    const product = simplify(expand(mul(quotient, p2)));
+    const statement = divE(product, p2);
+    const derivation = simplifyDerivation(statement, 'Divide');
+    const value = simplifyBest(statement);
+    if (key(value) === key(statement)) return null;
+    const b = new DerivationBuilder('Divide', statement);
+    b.apply(R_SIMPLIFY, mul(quotient, divE(p2, p2)),
+      `The numerator factors as (${toLatex(quotient)})(${toLatex(p2)}).`,
+      'Can the top be written with the bottom as a factor?');
+    b.apply(R_SIMPLIFY, simplify(quotient),
+      `The two copies of ${toLatex(p2)} cancel.`, 'What cancels?');
+    void derivation;
+    return {
+      prompt: 'Divide and simplify', statement, variable: 'x',
+      answer: { kind: 'simplified' as const, value: simplify(quotient) },
+      derivation: b.build(),
+    };
+  }
+
+  const statement = op === 'add' ? add(p1, p2) : mul(p1, p2);
+  const made = simplifyProblem(op === 'add' ? 'Simplify' : 'Expand', statement);
+  if (!made) return null;
+  return { ...made, variable: 'x' };
+};
+
+export const genFactoringCubics: Generator = ({ difficulty: d, seed }) => {
+  const r = new Rng(seed);
+  const r1 = r.nonzeroInt(-scale(d, 3, 6), scale(d, 3, 6));
+  const r2 = r.nonzeroInt(-scale(d, 3, 6), scale(d, 3, 6));
+  const r3 = r.int(-scale(d, 3, 6), scale(d, 3, 6));
+  const statement = simplify(expand(mul(subE(X, int(r1)), subE(X, int(r2)), subE(X, int(r3)))));
+  const p = toRatPoly(statement, 'x');
+  if (!p || degree(p) !== 3) return null;
+
+  const value = factor(statement);
+  if (key(value) === key(statement)) return null;
+
+  const b = new DerivationBuilder('Factor', statement);
+  const constant = p[0] ?? R.ZERO;
+  b.apply(R_SIMPLIFY, value,
+    `Any rational root divides the constant term ${R.toString(constant)}. ` +
+    `Testing those candidates finds ${r1}, and dividing out gives the rest.`,
+    'Try small factors of the constant term as roots.');
+
+  return {
+    prompt: 'Factor completely', statement, variable: 'x',
+    answer: { kind: 'expression' as const, value }, derivation: b.build(),
   };
 };

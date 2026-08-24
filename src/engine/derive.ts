@@ -169,6 +169,16 @@ export const R_SQUARE_ROOT_BOTH = defineRule({
   summary: 'Both the positive and negative root satisfy the equation.',
   skill: 'square-roots',
 });
+export const R_SQUARE_BOTH = defineRule({
+  id: 'square-both-sides', title: 'Square both sides',
+  summary: 'Squaring removes a square root, and can introduce solutions that must be checked.',
+  skill: 'radical-equations',
+});
+export const R_SPLIT_CASES = defineRule({
+  id: 'split-cases', title: 'Split into cases',
+  summary: 'One statement becomes the separate cases it allows.',
+  skill: 'absolute-value-equations',
+});
 export const R_SUBSTITUTE = defineRule({
   id: 'substitute', title: 'Substitute',
   summary: 'Replace a variable with an equal expression.', skill: 'substitution',
