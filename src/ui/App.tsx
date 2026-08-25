@@ -11,10 +11,12 @@ import { useCallback, useState } from 'react';
 import { Practice } from './Practice.tsx';
 import { Sandbox } from './Sandbox.tsx';
 import { MapView } from './MapView.tsx';
+import { HistoryView } from './HistoryView.tsx';
 import { ProgressView } from './ProgressView.tsx';
 import { useLearner, useTheme } from './useLearner.ts';
+import { buildIdentity } from './../store/db.ts';
 
-type Tab = 'practice' | 'map' | 'sandbox' | 'progress';
+type Tab = 'practice' | 'map' | 'sandbox' | 'history' | 'progress';
 
 /**
  * Icons are inline SVG rather than unicode glyphs. Symbol characters fall back
@@ -43,6 +45,12 @@ const ICONS: Record<Tab, JSX.Element> = {
       <path d="M5 4h14L11 12l8 8H5" />
     </svg>
   ),
+  history: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"
+         strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="8.5" /><path d="M12 7v5.2l3.2 2" />
+    </svg>
+  ),
   progress: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.9"
          strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -55,12 +63,16 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'practice', label: 'Practise' },
   { id: 'map', label: 'Map' },
   { id: 'sandbox', label: 'Scratchpad' },
+  { id: 'history', label: 'History' },
   { id: 'progress', label: 'Progress' },
 ];
 
 export function App() {
   const learner = useLearner();
   useTheme(learner.settings.theme);
+  // Two copies on two addresses keep two separate histories, which is
+  // invisible and maddening. The development copy says so, permanently.
+  const identity = buildIdentity();
 
   const [tab, setTab] = useState<Tab>('practice');
   const [focusSkill, setFocusSkill] = useState<string | undefined>(undefined);
@@ -91,6 +103,11 @@ export function App() {
       </nav>
 
       <main className="app__body">
+        {identity.isDev && (
+          <div className="devbar" role="note">
+            Development copy — its history is separate from the installed app.
+          </div>
+        )}
         {tab === 'practice' && (
           <Practice
             learner={learner}
@@ -100,6 +117,7 @@ export function App() {
         )}
         {tab === 'map' && <MapView learner={learner} onPractise={practise} />}
         {tab === 'sandbox' && <Sandbox />}
+        {tab === 'history' && <HistoryView learner={learner} onRetry={practise} />}
         {tab === 'progress' && <ProgressView learner={learner} />}
       </main>
     </div>

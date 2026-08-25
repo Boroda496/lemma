@@ -11,7 +11,10 @@ import { useMemo, useRef, useState } from 'react';
 import { ALL_SKILLS, getSkill } from './../curriculum/skills.ts';
 import { progressSummary, stateFor } from './../mastery/scheduler.ts';
 import { masteryOf } from './../mastery/model.ts';
-import { exportAll, importAll, clearAll, type Backup } from './../store/db.ts';
+import {
+  exportAll, importAll, clearAll, restoreFromSnapshot, readSnapshotMeta,
+  writeSnapshot, buildIdentity, bigintReplacer, bigintReviver, type Backup,
+} from './../store/db.ts';
 import type { Learner } from './useLearner.ts';
 
 export function ProgressView({ learner }: { learner: Learner }) {
@@ -50,7 +53,7 @@ export function ProgressView({ learner }: { learner: Learner }) {
   const doExport = async () => {
     try {
       const data = await exportAll();
-      const blob = new Blob([JSON.stringify(data, replacer, 2)], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify(data, bigintReplacer, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -66,7 +69,7 @@ export function ProgressView({ learner }: { learner: Learner }) {
   const doImport = async (file: File) => {
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text, reviver) as Backup;
+      const parsed = JSON.parse(text, bigintReviver) as Backup;
       const result = await importAll(parsed);
       learner.reload();
       setMessage(`Restored ${result.skills} topics and ${result.attempts} attempts.`);
@@ -86,6 +89,16 @@ export function ProgressView({ learner }: { learner: Learner }) {
           <span>
             This browser will not let the app store anything, so nothing from this session
             will be here next time. A private window is the usual cause.
+          </span>
+        </div>
+      )}
+
+      {learner.recovered && (
+        <div className="verdict verdict--partial" style={{ marginBottom: 14 }}>
+          <span className="verdict__glyph">↻</span>
+          <span>
+            The browser had cleared the database, so {learner.recovered.attempts} attempts and{' '}
+            {learner.recovered.skills} topics were restored from the local backup.
           </span>
         </div>
       )}
@@ -167,6 +180,8 @@ export function ProgressView({ learner }: { learner: Learner }) {
         </div>
       )}
 
+      <StoragePanel learner={learner} onMessage={setMessage} />
+
       <div className="card">
         <h2>Settings</h2>
         <div className="stack">
@@ -209,6 +224,35 @@ export function ProgressView({ learner }: { learner: Learner }) {
             style={{ display: 'none' }}
             onChange={(e) => { const f = e.target.files?.[0]; if (f) void doImport(f); e.target.value = ''; }}
           />
+          <button
+            className="btn btn--sm"
+            onClick={async () => {
+              try {
+                const data = await exportAll();
+                await navigator.clipboard.writeText(JSON.stringify(data, bigintReplacer));
+                setMessage('Copied. Paste it into the other copy with "Paste transfer".');
+              } catch {
+                setMessage('The browser would not give access to the clipboard. Use the file export instead.');
+              }
+            }}
+          >
+            Copy transfer
+          </button>
+          <button
+            className="btn btn--sm"
+            onClick={async () => {
+              try {
+                const text = await navigator.clipboard.readText();
+                const result = await importAll(JSON.parse(text, bigintReviver) as Backup);
+                learner.reload();
+                setMessage(`Merged in ${result.skills} topics and ${result.attempts} attempts.`);
+              } catch {
+                setMessage('Nothing usable on the clipboard. Copy from the other copy first.');
+              }
+            }}
+          >
+            Paste transfer
+          </button>
           <span className="spacer" />
           <button
             className="btn btn--sm btn--ghost"
@@ -228,6 +272,107 @@ export function ProgressView({ learner }: { learner: Learner }) {
   );
 }
 
+/**
+ * Durability, stated plainly.
+ *
+ * Two copies of this app on two origins have two separate databases, which is
+ * the single most confusing thing about running it from both a dev server and
+ * an installed URL. Naming the copy you are looking at, and offering a
+ * one-press transfer, is cheaper than explaining browser origins.
+ */
+function StoragePanel({ learner, onMessage }: {
+  learner: Learner;
+  onMessage: (m: string) => void;
+}) {
+  const identity = buildIdentity();
+  const snapshot = readSnapshotMeta();
+  const storage = learner.storage;
+
+  return (
+    <div className="card">
+      <h2>Storage</h2>
+
+      <div className="stack" style={{ gap: 10 }}>
+        <div className="row row--between">
+          <span>This copy</span>
+          <span className={`chip ${identity.isDev ? 'chip--gold' : 'chip--accent'}`}>
+            {identity.label}
+          </span>
+        </div>
+        <p className="small faint" style={{ margin: '-4px 0 0' }}>
+          {identity.origin}. Each address keeps its own separate history — the browser
+          does not share data between them.
+        </p>
+
+        <div className="row row--between">
+          <span>Durable</span>
+          <span className={`chip ${storage?.persistent ? 'chip--correct' : 'chip--gold'}`}>
+            {storage === null ? 'checking…' : storage.persistent ? 'Yes' : 'Best effort'}
+          </span>
+        </div>
+        {storage && !storage.persistent && (
+          <p className="small faint" style={{ margin: '-4px 0 0' }}>{storage.note}</p>
+        )}
+
+        {storage?.usedBytes != null && (
+          <div className="row row--between">
+            <span className="small muted">Using</span>
+            <span className="small faint">
+              {formatBytes(storage.usedBytes)}
+              {storage.quotaBytes ? ` of ${formatBytes(storage.quotaBytes)} available` : ''}
+            </span>
+          </div>
+        )}
+
+        <hr className="divider" style={{ margin: '4px 0' }} />
+
+        <div className="row row--between">
+          <span>Local backup</span>
+          <span className="small faint">
+            {snapshot
+              ? `${snapshot.attempts} attempts, saved ${relativeDay(snapshot.at)}`
+              : 'none yet'}
+          </span>
+        </div>
+        <p className="small faint" style={{ margin: '-4px 0 0' }}>
+          A second copy is kept separately from the main database and put back automatically
+          if the browser ever clears it.
+        </p>
+        <div className="row row--wrap" style={{ gap: 8 }}>
+          <button
+            className="btn btn--sm"
+            onClick={async () => {
+              const ok = await writeSnapshot();
+              onMessage(ok ? 'Local backup updated.' : 'Could not write the local backup.');
+            }}
+          >
+            Back up now
+          </button>
+          <button
+            className="btn btn--sm"
+            onClick={async () => {
+              const result = await restoreFromSnapshot();
+              learner.reload();
+              onMessage(result
+                ? `Restored ${result.attempts} attempts and ${result.skills} topics.`
+                : 'There is no local backup to restore.');
+            }}
+          >
+            Restore from backup
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
 function Stat({ value, label }: { value: number; label: string }) {
   return (
     <div className="stat">
@@ -239,6 +384,8 @@ function Stat({ value, label }: { value: number; label: string }) {
 
 function relativeDay(at: number): string {
   const days = (at - Date.now()) / 86_400_000;
+  if (days < -1) return `${Math.round(-days)} days ago`;
+  if (days < 0) return 'today';
   if (days < 1) return 'today';
   if (days < 2) return 'tomorrow';
   if (days < 14) return `in ${Math.round(days)} days`;
@@ -246,13 +393,3 @@ function relativeDay(at: number): string {
   return `in ${Math.round(days / 30)} months`;
 }
 
-/** BigInt does not survive JSON on its own; tag it so a backup round-trips. */
-function replacer(_key: string, value: unknown): unknown {
-  return typeof value === 'bigint' ? { __bigint: value.toString() } : value;
-}
-function reviver(_key: string, value: unknown): unknown {
-  if (value && typeof value === 'object' && '__bigint' in (value as Record<string, unknown>)) {
-    return BigInt((value as { __bigint: string }).__bigint);
-  }
-  return value;
-}

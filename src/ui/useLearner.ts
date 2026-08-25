@@ -14,7 +14,8 @@ import { stateFor } from './../mastery/scheduler.ts';
 import {
   loadSkillStates, saveSkillState, recordAttempt, loadAttempts,
   loadSettings, saveSettings, storageAvailable,
-  type Settings, DEFAULT_SETTINGS,
+  requestPersistence, recoverIfEmpty, writeSnapshot,
+  type Settings, type StorageStatus, DEFAULT_SETTINGS,
 } from './../store/db.ts';
 
 export interface Learner {
@@ -23,6 +24,10 @@ export interface Learner {
   settings: Settings;
   ready: boolean;
   persistent: boolean;
+  /** Full storage picture, for the durability panel. */
+  storage: StorageStatus | null;
+  /** Set when the app restored itself from the local snapshot on startup. */
+  recovered: { skills: number; attempts: number } | null;
   submit: (a: Attempt) => void;
   updateSettings: (patch: Partial<Settings>) => void;
   reload: () => void;
@@ -34,7 +39,10 @@ export function useLearner(): Learner {
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [ready, setReady] = useState(false);
   const [persistent, setPersistent] = useState(true);
+  const [storage, setStorage] = useState<StorageStatus | null>(null);
+  const [recovered, setRecovered] = useState<{ skills: number; attempts: number } | null>(null);
   const mounted = useRef(true);
+  const sinceSnapshot = useRef(0);
 
   const load = useCallback(() => {
     let cancelled = false;
@@ -43,6 +51,22 @@ export function useLearner(): Learner {
       if (cancelled) return;
       setPersistent(ok);
       if (!ok) { setReady(true); return; }
+
+      // Ask for durable storage every load: the answer changes once the app is
+      // installed to the home screen, and until it is granted the browser may
+      // evict everything without warning.
+      void requestPersistence().then((s) => { if (!cancelled) setStorage(s); });
+
+      // If the database came back empty but a snapshot exists, the browser
+      // evicted it between sessions. Put it back before rendering, or the app
+      // opens looking brand new with the real history sitting in localStorage.
+      try {
+        const restored = await recoverIfEmpty();
+        if (restored && !cancelled) setRecovered(restored);
+      } catch {
+        // Recovery is best-effort; a failure here must not block startup.
+      }
+
       try {
         const [s, a, cfg] = await Promise.all([loadSkillStates(), loadAttempts(600), loadSettings()]);
         if (cancelled) return;
@@ -74,6 +98,15 @@ export function useLearner(): Learner {
     });
     setAttempts((prev) => [a, ...prev].slice(0, 600));
     void recordAttempt(a).catch(() => setPersistent(false));
+
+    // Snapshot to localStorage every few problems. Often enough that an
+    // eviction costs a couple of answers rather than a week, rare enough that
+    // it never runs during the interaction itself.
+    sinceSnapshot.current += 1;
+    if (sinceSnapshot.current >= 3) {
+      sinceSnapshot.current = 0;
+      setTimeout(() => { void writeSnapshot(); }, 1200);
+    }
   }, []);
 
   const updateSettings = useCallback((patch: Partial<Settings>) => {
@@ -84,7 +117,20 @@ export function useLearner(): Learner {
     });
   }, []);
 
-  return { states, attempts, settings, ready, persistent, submit, updateSettings, reload: load };
+  // A snapshot on the way out catches whatever the counter has not yet.
+  useEffect(() => {
+    const flush = () => { void writeSnapshot(); };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') flush();
+    });
+    return () => window.removeEventListener('pagehide', flush);
+  }, []);
+
+  return {
+    states, attempts, settings, ready, persistent, storage, recovered,
+    submit, updateSettings, reload: load,
+  };
 }
 
 /** Apply the theme choice to the document, so CSS tokens follow it. */

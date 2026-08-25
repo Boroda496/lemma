@@ -6,3 +6,4 @@ dev-dist
 shot.mjs
 flow.mjs
 final.mjs
+verify.mjs

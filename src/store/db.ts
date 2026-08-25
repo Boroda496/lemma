@@ -205,3 +205,157 @@ export async function storageAvailable(): Promise<boolean> {
     return false;
   }
 }
+
+// ------------------------------------------------------------- durability
+
+export interface StorageStatus {
+  /** IndexedDB is reachable at all. */
+  readonly available: boolean;
+  /**
+   * The browser has promised not to evict this data automatically. Without
+   * this, IndexedDB is "best-effort" and can be cleared under storage
+   * pressure without warning — which for this app means losing every session.
+   */
+  readonly persistent: boolean;
+  /** Bytes in use, when the browser will say. */
+  readonly usedBytes: number | null;
+  readonly quotaBytes: number | null;
+  /** Why persistence was not granted, when we can tell. */
+  readonly note: string;
+}
+
+/**
+ * Ask the browser to make storage durable.
+ *
+ * Chrome grants this to installed PWAs and to sites with enough engagement,
+ * and refuses silently otherwise. Firefox prompts. Calling it repeatedly is
+ * harmless and is worth doing on every load, because the answer changes once
+ * the app is installed to the home screen.
+ */
+export async function requestPersistence(): Promise<StorageStatus> {
+  const available = await storageAvailable();
+  let persistent = false;
+  let usedBytes: number | null = null;
+  let quotaBytes: number | null = null;
+  let note = '';
+
+  try {
+    if (navigator.storage?.persisted) {
+      persistent = await navigator.storage.persisted();
+      if (!persistent && navigator.storage.persist) {
+        persistent = await navigator.storage.persist();
+      }
+    } else {
+      note = 'This browser does not support durable storage, so data is kept on a best-effort basis.';
+    }
+  } catch {
+    note = 'The browser refused the durable-storage request.';
+  }
+
+  try {
+    if (navigator.storage?.estimate) {
+      const est = await navigator.storage.estimate();
+      usedBytes = est.usage ?? null;
+      quotaBytes = est.quota ?? null;
+    }
+  } catch {
+    // Estimates are a nicety; their absence is not a problem.
+  }
+
+  if (!persistent && !note) {
+    note = 'Install the app (Add to home screen, or the install icon in the address bar) and this is granted automatically.';
+  }
+
+  return { available, persistent, usedBytes, quotaBytes, note };
+}
+
+// ---------------------------------------------------------- safety snapshot
+
+const SNAPSHOT_KEY = 'lemma:snapshot';
+const SNAPSHOT_META_KEY = 'lemma:snapshot:meta';
+
+/**
+ * A second copy of everything, in localStorage.
+ *
+ * IndexedDB and localStorage fail independently: a corrupted object store, a
+ * half-finished upgrade, or an eviction that takes one does not usually take
+ * the other. The snapshot is small — attempts store only a problem id, never
+ * a problem — so keeping a whole duplicate costs little and turns "everything
+ * is gone" into "the last few problems are gone".
+ */
+export async function writeSnapshot(): Promise<boolean> {
+  try {
+    const backup = await exportAll();
+    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(backup, bigintReplacer));
+    localStorage.setItem(SNAPSHOT_META_KEY, JSON.stringify({
+      at: Date.now(),
+      skills: backup.skillStates.length,
+      attempts: backup.attempts.length,
+    }));
+    return true;
+  } catch {
+    // A full localStorage or a private window; the app carries on regardless.
+    return false;
+  }
+}
+
+export function readSnapshotMeta(): { at: number; skills: number; attempts: number } | null {
+  try {
+    const raw = localStorage.getItem(SNAPSHOT_META_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Restore from the local snapshot. Merges, so it cannot lose newer work. */
+export async function restoreFromSnapshot(): Promise<{ skills: number; attempts: number } | null> {
+  try {
+    const raw = localStorage.getItem(SNAPSHOT_KEY);
+    if (!raw) return null;
+    return await importAll(JSON.parse(raw, bigintReviver) as Backup);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * If IndexedDB is empty but a snapshot exists, put it back.
+ *
+ * This is the case that matters: the browser evicted the database between
+ * sessions and the app would otherwise open looking brand new, with the real
+ * history sitting untouched in localStorage.
+ */
+export async function recoverIfEmpty(): Promise<{ skills: number; attempts: number } | null> {
+  try {
+    const states = await loadSkillStates();
+    if (Object.keys(states).length > 0) return null;
+    const meta = readSnapshotMeta();
+    if (!meta || meta.skills === 0) return null;
+    return await restoreFromSnapshot();
+  } catch {
+    return null;
+  }
+}
+
+/** BigInt does not survive JSON on its own; tag it so a backup round-trips. */
+export function bigintReplacer(_key: string, value: unknown): unknown {
+  return typeof value === 'bigint' ? { __bigint: value.toString() } : value;
+}
+export function bigintReviver(_key: string, value: unknown): unknown {
+  if (value && typeof value === 'object' && '__bigint' in (value as Record<string, unknown>)) {
+    return BigInt((value as { __bigint: string }).__bigint);
+  }
+  return value;
+}
+
+/** Which build and origin this is, so two copies are never confused. */
+export function buildIdentity(): { origin: string; label: string; isDev: boolean } {
+  const origin = typeof location === 'undefined' ? 'unknown' : location.origin;
+  const isDev = /localhost|127\.0\.0\.1|\[::1\]/.test(origin);
+  return {
+    origin,
+    label: isDev ? 'Development copy' : 'Installed app',
+    isDev,
+  };
+}

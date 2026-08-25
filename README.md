@@ -69,10 +69,33 @@ desktop and tablet app.
   numbers to definite integrals. All 68 have problems.
 - **Scratchpad** — type any expression and see it simplified, expanded,
   factored, solved, and graphed, with the working.
+- **History** — every problem answered, newest first, rebuilt from its id and
+  reopenable. Filter to the ones you missed or needed help with.
 - **Progress** — what is durable, what is due, how the last stretch went.
 
-Everything is stored on the device. Nothing is uploaded, and there is no
-account. Export a backup to move to another machine.
+## Where your history lives
+
+On the device, in the browser, per address. Nothing is uploaded and there is
+no account.
+
+That last part matters more than it sounds: a browser keeps separate storage
+for every origin, so `localhost:5173` and the deployed URL have **completely
+separate histories**. The app names which copy you are looking at rather than
+letting you find out the hard way, and Progress → *Copy transfer* / *Paste
+transfer* moves everything from one to the other in two clicks.
+
+Two things protect the data:
+
+- **Durable storage** is requested on every load. Until it is granted, a
+  browser may evict the database under storage pressure without warning.
+  Installing the app grants it automatically, which is the main reason to
+  install rather than use a tab.
+- **A second copy** is written to localStorage every few problems. The two
+  fail independently, so if the database is ever cleared the app restores
+  itself on the next load and says so.
+
+`./scripts/install-desktop.sh` adds it to the applications menu as its own
+window.
 
 ## Layout
 
