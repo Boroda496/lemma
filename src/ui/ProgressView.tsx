@@ -13,7 +13,8 @@ import { progressSummary, stateFor } from './../mastery/scheduler.ts';
 import { masteryOf } from './../mastery/model.ts';
 import {
   exportAll, importAll, clearAll, restoreFromSnapshot, readSnapshotMeta,
-  writeSnapshot, buildIdentity, bigintReplacer, bigintReviver, type Backup,
+  writeSnapshot, buildIdentity, requestPersistence, isFirefox,
+  bigintReplacer, bigintReviver, type Backup, type StorageStatus,
 } from './../store/db.ts';
 import type { Learner } from './useLearner.ts';
 
@@ -286,7 +287,9 @@ function StoragePanel({ learner, onMessage }: {
 }) {
   const identity = buildIdentity();
   const snapshot = readSnapshotMeta();
-  const storage = learner.storage;
+  // The panel can update the status itself, without waiting for a reload.
+  const [localStatus, setLocalStorageStatus] = useState<StorageStatus | null>(null);
+  const storage = localStatus ?? learner.storage;
 
   return (
     <div className="card">
@@ -311,7 +314,30 @@ function StoragePanel({ learner, onMessage }: {
           </span>
         </div>
         {storage && !storage.persistent && (
-          <p className="small faint" style={{ margin: '-4px 0 0' }}>{storage.note}</p>
+          <>
+            <p className="small faint" style={{ margin: '-4px 0 0' }}>{storage.note}</p>
+            <button
+              className="btn btn--sm btn--primary"
+              onClick={async () => {
+                // Firefox only shows its prompt in response to a click, so the
+                // request on page load can never succeed there. This button is
+                // the only path to permanent storage in that browser.
+                const next = await requestPersistence();
+                setLocalStorageStatus(next);
+                onMessage(next.persistent
+                  ? 'Storage is now permanent — the browser will not clear it.'
+                  : 'The browser declined. Your work is still backed up locally and can be exported.');
+              }}
+            >
+              Make storage permanent
+            </button>
+            {isFirefox() && (
+              <p className="small faint" style={{ margin: '-2px 0 0' }}>
+                Also check that Firefox is not set to clear cookies and site data on exit,
+                under Settings → Privacy &amp; Security.
+              </p>
+            )}
+          </>
         )}
 
         {storage?.usedBytes != null && (

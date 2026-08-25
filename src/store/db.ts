@@ -263,11 +263,19 @@ export async function requestPersistence(): Promise<StorageStatus> {
   }
 
   if (!persistent && !note) {
-    note = 'Install the app (Add to home screen, or the install icon in the address bar) and this is granted automatically.';
+    // Firefox asks the user and needs a click to do it; Chrome decides silently
+    // and grants it to installed apps. The advice differs enough to be worth
+    // splitting, since following the wrong one gets you nowhere.
+    note = isFirefox()
+      ? 'Firefox asks before making storage permanent. Press the button below and allow the prompt.'
+      : 'Install the app (Add to home screen, or the install icon in the address bar) and this is granted automatically.';
   }
 
   return { available, persistent, usedBytes, quotaBytes, note };
 }
+
+export const isFirefox = (): boolean =>
+  typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent);
 
 // ---------------------------------------------------------- safety snapshot
 
