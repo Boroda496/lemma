@@ -75,10 +75,10 @@ desktop and tablet app.
 
 ## Where your history lives
 
-On the device, in the browser, per address. Nothing is uploaded and there is
-no account.
+On the device, in the browser, per address. By default nothing is uploaded and
+there is no account.
 
-That last part matters more than it sounds: a browser keeps separate storage
+That matters more than it sounds: a browser keeps separate storage
 for every origin, so `localhost:5173` and the deployed URL have **completely
 separate histories**. The app names which copy you are looking at rather than
 letting you find out the hard way, and Progress → *Copy transfer* / *Paste
@@ -97,6 +97,27 @@ Two things protect the data:
 `./scripts/install-desktop.sh` adds it to the applications menu as its own
 window.
 
+## Sync across devices
+
+Optional, off until you turn it on. Type the same passphrase on your phone,
+tablet and desktop under Progress → *Sync across devices* and they share one
+history: answer problems on any of them, in any order, offline included, and
+progress merges both ways.
+
+Merging is a union — attempts are matched on when they happened and which
+problem they were, and per-skill progress keeps whichever record has more
+attempts behind it — so no ordering of syncs can lose an answer. The other
+side of that coin is that there is no deletion: clearing progress on one
+device and syncing pulls it back from the others.
+
+Your history is encrypted with the passphrase before it leaves the device.
+The service that stores it holds ciphertext and cannot read it, and nobody can
+reset a forgotten passphrase, because nothing capable of reversing it exists.
+
+The server is [`worker/`](worker/) — about 130 lines on Cloudflare Workers and
+KV, storing one opaque blob. Three devices produce a few dozen requests a day
+against a free-tier limit of 100,000. See [`docs/sync.md`](docs/sync.md).
+
 ## Layout
 
 ```
@@ -104,10 +125,13 @@ src/engine/      the computer algebra system — no DOM, no dependencies
 src/curriculum/  skills, problem generators, grading
 src/mastery/     ratings, spaced repetition, the scheduler
 src/store/       IndexedDB
+src/sync/        optional cross-device sync: key derivation, encryption, merge
 src/ui/          React
-tests/           341 tests, including property-based ones
+worker/          the sync server — one file, no app logic in it
+tests/           371 tests, including property-based ones
 docs/            deeper notes on each subsystem
 ```
 
 `docs/engine.md` covers the parts of the engine that are load-bearing for the
-correctness claim.
+correctness claim. `docs/sync.md` covers how devices merge and what the
+passphrase does.

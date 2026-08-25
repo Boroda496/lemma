@@ -33,8 +33,13 @@ Verified mathematics practice. Vite + React PWA, local-first, no server.
 | `src/curriculum/generators/` | Problem generators, one file per strand. |
 | `src/curriculum/registry.ts` | skill → generators, and the verified generation pipeline. |
 | `src/mastery/` | Elo rating, spaced retention, the scheduler. |
-| `src/store/db.ts` | IndexedDB. Local only; export/import moves data between devices. |
+| `src/store/db.ts` | IndexedDB. `planMerge` is the rule for combining two devices. |
+| `src/sync/` | Optional sync: PBKDF2 key derivation, AES-GCM, pull/merge/push. |
+| `worker/src/index.ts` | The whole sync server. Stores ciphertext; contains no app logic. |
 | `src/ui/` | React. One responsive layout, no device sniffing. |
+
+`docs/sync.md` has the merge rules, the conflict handling, and the honest
+limits of the passphrase-as-account design.
 
 `docs/engine.md` has the reasoning behind the load-bearing engine decisions,
 including several that were bugs first.

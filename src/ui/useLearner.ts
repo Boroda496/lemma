@@ -17,6 +17,7 @@ import {
   requestPersistence, recoverIfEmpty, writeSnapshot,
   type Settings, type StorageStatus, DEFAULT_SETTINGS,
 } from './../store/db.ts';
+import { startAutoSync, syncSoon, getStatus, onStatus, type SyncStatus } from './../sync/client.ts';
 
 export interface Learner {
   states: Record<string, SkillState>;
@@ -28,6 +29,8 @@ export interface Learner {
   storage: StorageStatus | null;
   /** Set when the app restored itself from the local snapshot on startup. */
   recovered: { skills: number; attempts: number } | null;
+  /** Cross-device sync, or phase 'off' when this device is not linked. */
+  sync: SyncStatus;
   submit: (a: Attempt) => void;
   updateSettings: (patch: Partial<Settings>) => void;
   reload: () => void;
@@ -41,6 +44,7 @@ export function useLearner(): Learner {
   const [persistent, setPersistent] = useState(true);
   const [storage, setStorage] = useState<StorageStatus | null>(null);
   const [recovered, setRecovered] = useState<{ skills: number; attempts: number } | null>(null);
+  const [sync, setSync] = useState<SyncStatus>(getStatus);
   const mounted = useRef(true);
   const sinceSnapshot = useRef(0);
 
@@ -107,6 +111,10 @@ export function useLearner(): Learner {
       sinceSnapshot.current = 0;
       setTimeout(() => { void writeSnapshot(); }, 1200);
     }
+
+    // Batched, so a ten-problem session is one upload rather than ten. Does
+    // nothing at all when this device is not linked.
+    syncSoon();
   }, []);
 
   const updateSettings = useCallback((patch: Partial<Settings>) => {
@@ -116,6 +124,12 @@ export function useLearner(): Learner {
       return next;
     });
   }, []);
+
+  // Sync on launch, on returning to the app, and when the network comes back.
+  // When a sync brings work down from another device, reload so the screen
+  // shows it — otherwise the map and history would sit there stale.
+  useEffect(() => onStatus(setSync), []);
+  useEffect(() => startAutoSync(() => load()), [load]);
 
   // A snapshot on the way out catches whatever the counter has not yet.
   useEffect(() => {
@@ -128,7 +142,7 @@ export function useLearner(): Learner {
   }, []);
 
   return {
-    states, attempts, settings, ready, persistent, storage, recovered,
+    states, attempts, settings, ready, persistent, storage, recovered, sync,
     submit, updateSettings, reload: load,
   };
 }

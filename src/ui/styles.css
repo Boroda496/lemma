@@ -268,6 +268,27 @@ h3 { font-size: 14px; font-weight: 620; margin: 0 0 6px; }
 .row--between { justify-content: space-between; }
 .spacer { flex: 1; }
 
+/* Text fields. Sized to the same tap target as buttons so a form of both
+   lines up, and 16px so mobile Safari does not zoom the page on focus. */
+.input {
+  appearance: none;
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-raised);
+  color: var(--text);
+  border-radius: var(--radius-sm);
+  padding: 0 14px;
+  min-height: var(--tap);
+  font-size: 16px;
+}
+.input::placeholder { color: var(--text-faint); }
+.input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
 /* ----------------------------------------------------------------- buttons */
 
 .btn {

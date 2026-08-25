@@ -1,0 +1,8 @@
+name = "lemma-sync"
+main = "src/index.ts"
+compatibility_date = "2024-11-01"
+
+# Created with `npx wrangler kv namespace create LEMMA`.
+[[kv_namespaces]]
+binding = "LEMMA"
+id = "3405a142fd8c4f65ad09617f3a0bf036"

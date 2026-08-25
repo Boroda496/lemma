@@ -1,10 +1,11 @@
 /**
  * Local-first storage on IndexedDB.
  *
- * Everything lives on the device. There is no account, no server, and nothing
- * to configure before the app works — open it and it runs, offline included.
- * The trade-off is that progress does not follow you between devices on its
- * own, so export/import is a first-class feature rather than an afterthought.
+ * The device is the source of truth. There is no account and nothing to
+ * configure before the app works — open it and it runs, offline included.
+ * Sync (see `src/sync/`) is optional and additive: it merges other devices'
+ * work into this database and pushes the result back, but nothing here
+ * depends on it, and unlinking leaves a database that still works alone.
  *
  * Attempts store only the problem id, never the problem. Ids regenerate the
  * problem exactly, so the history stays small and reviewing an old problem
@@ -159,24 +160,51 @@ export async function exportAll(): Promise<Backup> {
 export async function importAll(backup: Backup): Promise<{ skills: number; attempts: number }> {
   if (backup.version !== 1) throw new Error('That backup was made by a different version.');
 
-  const existing = await loadSkillStates();
-  let skills = 0;
-  for (const incoming of backup.skillStates) {
-    const current = existing[incoming.skillId];
-    if (!current || incoming.attempts > current.attempts) {
-      await saveSkillState(incoming);
-      skills++;
-    }
+  const [existing, known] = await Promise.all([loadSkillStates(), loadAttempts(100000)]);
+  const plan = planMerge(existing, known, backup);
+
+  for (const state of plan.skillStates) await saveSkillState(state);
+  for (const a of plan.attempts) await recordAttempt(a);
+
+  return { skills: plan.skillStates.length, attempts: plan.attempts.length };
+}
+
+/**
+ * What a merge would change, without touching storage.
+ *
+ * Split out from `importAll` so the rules can be tested directly: they decide
+ * whether syncing between devices can ever lose work, which is not something
+ * to establish by trying it on real history.
+ *
+ * An attempt is identified by when it happened and which problem it was, so
+ * the same session imported twice adds nothing the second time. A skill's
+ * record is a running summary rather than a log, so it cannot be merged field
+ * by field — the two sides are alternative histories of the same skill, and
+ * the one with more attempts behind it is the one that has seen everything
+ * the other has.
+ */
+export function planMerge(
+  existingStates: Record<string, SkillState>,
+  existingAttempts: readonly Attempt[],
+  incoming: Backup,
+): { skillStates: SkillState[]; attempts: Attempt[] } {
+  const skillStates: SkillState[] = [];
+  for (const candidate of incoming.skillStates) {
+    const current = existingStates[candidate.skillId];
+    if (!current || candidate.attempts > current.attempts) skillStates.push(candidate);
   }
 
-  const known = new Set((await loadAttempts(100000)).map((a) => `${a.at}:${a.problemId}`));
-  let attempts = 0;
-  for (const a of backup.attempts) {
-    if (known.has(`${a.at}:${a.problemId}`)) continue;
-    await recordAttempt(a);
-    attempts++;
+  const key = (a: Attempt) => `${a.at}:${a.problemId}`;
+  const known = new Set(existingAttempts.map(key));
+  const attempts: Attempt[] = [];
+  for (const a of incoming.attempts) {
+    if (known.has(key(a))) continue;
+    // Guard against a backup that repeats an attempt within itself, which
+    // would otherwise be written twice and inflate the history.
+    known.add(key(a));
+    attempts.push(a);
   }
-  return { skills, attempts };
+  return { skillStates, attempts };
 }
 
 /** Wipe everything. Used by the reset control, which confirms first. */

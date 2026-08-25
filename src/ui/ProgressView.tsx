@@ -17,6 +17,10 @@ import {
   bigintReplacer, bigintReviver, type Backup, type StorageStatus,
 } from './../store/db.ts';
 import type { Learner } from './useLearner.ts';
+import {
+  link, unlink, loadConfig, syncNow, forgetRemote, type SyncStatus,
+} from './../sync/client.ts';
+import { DEFAULT_ENDPOINT } from './../sync/endpoint.ts';
 
 export function ProgressView({ learner }: { learner: Learner }) {
   const [message, setMessage] = useState<string | null>(null);
@@ -181,6 +185,8 @@ export function ProgressView({ learner }: { learner: Learner }) {
         </div>
       )}
 
+      <SyncPanel learner={learner} onMessage={setMessage} />
+
       <StoragePanel learner={learner} onMessage={setMessage} />
 
       <div className="card">
@@ -213,7 +219,8 @@ export function ProgressView({ learner }: { learner: Learner }) {
 
         <h3>Your data</h3>
         <p className="small muted" style={{ marginTop: 0 }}>
-          Everything is stored on this device only. Export a backup to move to another one.
+          A backup file is a complete copy you keep yourself — useful before a big change,
+          or to move onto a device you would rather not link.
         </p>
         <div className="row row--wrap" style={{ gap: 8 }}>
           <button className="btn btn--sm" onClick={doExport}>Export backup</button>
@@ -390,6 +397,211 @@ function StoragePanel({ learner, onMessage }: {
       </div>
     </div>
   );
+}
+
+/**
+ * Linking devices.
+ *
+ * The whole of the setup is one passphrase, typed the same on each device.
+ * There is no account to make and no address to copy, because the address is
+ * built in and the passphrase is what proves the devices are the same
+ * person's. The one thing this panel has to be honest about is that a
+ * forgotten passphrase cannot be reset by anyone, including us — nothing that
+ * could reverse it exists.
+ */
+function SyncPanel({ learner, onMessage }: {
+  learner: Learner;
+  onMessage: (m: string) => void;
+}) {
+  const [config, setConfig] = useState(() => loadConfig());
+  const [passphrase, setPassphrase] = useState('');
+  const [confirmPhrase, setConfirmPhrase] = useState('');
+  const [endpoint, setEndpoint] = useState(() => loadConfig()?.endpoint || DEFAULT_ENDPOINT);
+  const [busy, setBusy] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const status = learner.sync;
+
+  const linked = config !== null;
+  const mismatch = confirmPhrase.length > 0 && confirmPhrase !== passphrase;
+  const canLink = passphrase.trim().length >= 8 && !mismatch && endpoint.trim().length > 0 && !busy;
+
+  const doLink = async () => {
+    setBusy(true);
+    try {
+      const cfg = await link(endpoint, passphrase);
+      setConfig(cfg);
+      setPassphrase('');
+      setConfirmPhrase('');
+      const result = await syncNow();
+      learner.reload();
+      onMessage(
+        result.wrongPassphrase
+          ? 'There is already data saved under a different passphrase at this address.'
+          : result.phase === 'idle'
+            ? 'Linked. This device is now in sync.'
+            : 'Linked, but the first sync did not complete. It will retry on its own.',
+      );
+    } catch (err) {
+      onMessage(err instanceof Error ? err.message : 'Could not link this device.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h2>Sync across devices</h2>
+
+      {!linked && (
+        <>
+          <p className="small muted" style={{ marginTop: 0 }}>
+            Type the same passphrase on your phone, tablet and desktop and they share one
+            history. Progress merges both ways — you can answer problems on any of them,
+            in any order, offline included.
+          </p>
+          <div className="stack" style={{ gap: 8 }}>
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              placeholder="Passphrase (at least 8 characters)"
+              value={passphrase}
+              onChange={(e) => setPassphrase(e.target.value)}
+            />
+            <input
+              className="input"
+              type="password"
+              autoComplete="new-password"
+              placeholder="Type it again"
+              value={confirmPhrase}
+              onChange={(e) => setConfirmPhrase(e.target.value)}
+            />
+            {mismatch && <p className="small faint" style={{ margin: 0 }}>Those do not match.</p>}
+            <p className="small faint" style={{ margin: 0 }}>
+              Your progress is encrypted with this passphrase before it leaves the device, so
+              the service that stores it cannot read it. Nobody can reset it for you — if it is
+              forgotten, the stored copy is unreadable and you start again from whatever is on
+              your devices.
+            </p>
+            <div className="row row--wrap" style={{ gap: 8 }}>
+              <button className="btn btn--sm btn--primary" disabled={!canLink} onClick={doLink}>
+                {busy ? 'Linking…' : 'Link this device'}
+              </button>
+              <button className="btn btn--sm btn--ghost" onClick={() => setShowAdvanced((v) => !v)}>
+                {showAdvanced ? 'Hide address' : 'Change address'}
+              </button>
+            </div>
+            {showAdvanced && (
+              <input
+                className="input"
+                type="url"
+                placeholder="https://lemma-sync.…workers.dev"
+                value={endpoint}
+                onChange={(e) => setEndpoint(e.target.value)}
+              />
+            )}
+          </div>
+        </>
+      )}
+
+      {linked && (
+        <div className="stack" style={{ gap: 10 }}>
+          <div className="row row--between">
+            <span>Status</span>
+            <span className={`chip ${chipFor(status)}`}>{describe(status)}</span>
+          </div>
+          {status.lastSyncedAt && (
+            <p className="small faint" style={{ margin: '-4px 0 0' }}>
+              Last synced {relativeTime(status.lastSyncedAt)}.
+            </p>
+          )}
+          {status.wrongPassphrase && (
+            <p className="small faint" style={{ margin: '-4px 0 0' }}>
+              The stored copy was written with a different passphrase. Unlink and link again with
+              the one you used on your other devices.
+            </p>
+          )}
+          {status.error && !status.wrongPassphrase && (
+            <p className="small faint" style={{ margin: '-4px 0 0' }}>{status.error}</p>
+          )}
+          {status.phase === 'offline' && (
+            <p className="small faint" style={{ margin: '-4px 0 0' }}>
+              Keep practising — everything is saved here and goes up when you are back online.
+            </p>
+          )}
+
+          <div className="row row--wrap" style={{ gap: 8 }}>
+            <button
+              className="btn btn--sm btn--primary"
+              disabled={status.phase === 'syncing'}
+              onClick={async () => {
+                const result = await syncNow();
+                learner.reload();
+                onMessage(
+                  result.pulled
+                    ? `Brought in ${result.pulled.attempts} attempts from your other devices.`
+                    : result.phase === 'idle'
+                      ? 'Up to date.'
+                      : 'Could not reach the sync service. It will retry on its own.',
+                );
+              }}
+            >
+              Sync now
+            </button>
+            <button
+              className="btn btn--sm"
+              onClick={() => {
+                if (!confirm('Stop syncing on this device? Your progress here is kept.')) return;
+                unlink();
+                setConfig(null);
+                onMessage('This device no longer syncs. Nothing was deleted.');
+              }}
+            >
+              Unlink this device
+            </button>
+            <span className="spacer" />
+            <button
+              className="btn btn--sm btn--ghost"
+              onClick={async () => {
+                if (!confirm('Delete the shared copy for every device? Progress on this device is kept.')) return;
+                await forgetRemote();
+                unlink();
+                setConfig(null);
+                onMessage('The shared copy is gone. This device kept its own progress.');
+              }}
+            >
+              Delete shared copy
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function chipFor(s: SyncStatus): string {
+  if (s.phase === 'idle') return 'chip--correct';
+  if (s.phase === 'error') return 'chip--gold';
+  return 'chip--accent';
+}
+
+function describe(s: SyncStatus): string {
+  switch (s.phase) {
+    case 'idle': return 'In sync';
+    case 'syncing': return 'Syncing…';
+    case 'offline': return 'Offline';
+    case 'error': return 'Needs attention';
+    default: return 'Not linked';
+  }
+}
+
+function relativeTime(at: number): string {
+  const mins = Math.round((Date.now() - at) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} minute${mins === 1 ? '' : 's'} ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  return relativeDay(at);
 }
 
 function formatBytes(n: number): string {
