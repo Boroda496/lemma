@@ -118,3 +118,20 @@ npx wrangler deploy
 Then put the deployed URL in `DEFAULT_ENDPOINT` in
 [`src/sync/endpoint.ts`](../src/sync/endpoint.ts) so linking a device is a
 passphrase and nothing else, and rebuild the app.
+
+The live deployment is `https://lemma-sync.boroda496.workers.dev`.
+
+Two things wrangler gets wrong if left to defaults, both now stated in
+`wrangler.toml`:
+
+- `workers_dev = true` — so a deploy either produces a reachable address or
+  fails saying why, rather than uploading a worker with no route.
+- `preview_urls = false` — every published URL is another address the blob can
+  be reached at, and versioned preview URLs buy nothing here.
+
+One thing that is not a default and must not be changed back: the worker
+compares the **revision** inside an `If-Match` header, not the header text.
+Cloudflare's edge marks responses weak, so a client echoes back `W/"1"` for the
+`"1"` the worker set. A literal comparison rejects every push after the first,
+which unit tests against a fake store cannot catch — only the real edge shows
+it.

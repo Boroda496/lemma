@@ -2,6 +2,14 @@ name = "lemma-sync"
 main = "src/index.ts"
 compatibility_date = "2024-11-01"
 
+# Publish to <name>.<subdomain>.workers.dev. Stated rather than left to the
+# default, so a deploy either produces a reachable address or fails saying why.
+workers_dev = true
+
+# One address, not one per version. Every published URL is another place the
+# blob can be reached, and versioned preview URLs buy nothing here.
+preview_urls = false
+
 # Created with `npx wrangler kv namespace create LEMMA`.
 [[kv_namespaces]]
 binding = "LEMMA"

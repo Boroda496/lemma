@@ -6,4 +6,4 @@
  * in the app stays editable for the case where the worker is redeployed under
  * a different name.
  */
-export const DEFAULT_ENDPOINT = '';
+export const DEFAULT_ENDPOINT = 'https://lemma-sync.boroda496.workers.dev';

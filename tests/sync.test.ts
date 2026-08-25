@@ -240,6 +240,16 @@ describe('the sync service', () => {
     expect(late.status).toBe(412);        // the second is told to merge again
   });
 
+  it('accepts the weak etag the edge hands back, not just the one it set', async () => {
+    // Cloudflare rewrites `"1"` to `W/"1"` on the way out, so a client echoes
+    // back something the worker never wrote. Rejecting it would 412 every
+    // push after the first.
+    const env = fakeStore();
+    await put(env);
+    expect((await put(env, body, { 'if-match': 'W/"1"' })).status).toBe(200);
+    expect((await put(env, body, { 'if-match': 'W/"1"' })).status).toBe(412);
+  });
+
   it('lets a first write through without a revision to match', async () => {
     expect((await put(fakeStore(), body, { 'if-match': '*' })).status).toBe(200);
   });

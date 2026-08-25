@@ -50,6 +50,12 @@ const CORS = {
   'access-control-expose-headers': 'etag',
 };
 
+/** The number inside an ETag, however the edge has dressed it up. */
+function revisionOf(header: string): number {
+  const digits = /(\d+)/.exec(header.replace(/^W\//, ''));
+  return digits ? Number(digits[1]) : NaN;
+}
+
 const json = (body: unknown, status = 200, extra: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), {
     status,
@@ -106,11 +112,15 @@ export default {
       // Optimistic concurrency, when the client asks for it. Two devices
       // syncing in the same second would otherwise have one overwrite the
       // other's merge; this makes the loser retry against the winner's copy.
+      //
+      // The comparison is on the revision itself rather than the header text,
+      // because Cloudflare's edge marks responses as weak — a client echoes
+      // back `W/"1"` for the `"1"` we set, and a literal comparison would
+      // reject every write after the first.
       const expect = request.headers.get('if-match');
-      if (expect && expect !== '*' && expect !== `"${prev.metadata?.rev ?? 0}"`) {
-        return json({ error: 'stale', rev: prev.metadata?.rev ?? 0 }, 412, {
-          etag: `"${prev.metadata?.rev ?? 0}"`,
-        });
+      const held = prev.metadata?.rev ?? 0;
+      if (expect && expect !== '*' && revisionOf(expect) !== held) {
+        return json({ error: 'stale', rev: held }, 412, { etag: `"${held}"` });
       }
 
       await env.LEMMA.put(key, body, { metadata: { rev, at: Date.now() } });
